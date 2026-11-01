@@ -1,12 +1,12 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║  Analítica Descriptiva — Sector Real Colombiano 2021–2024                  ║
+║  Analítica Descriptiva — Sector Real Colombiano 2021–2024 (V12)            ║
 ║  Trabajo de Grado | Maestría en Analítica e Inteligencia de Negocios       ║
 ║  Stack: Streamlit · Plotly · scikit-learn · pandas                         ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
-import os, warnings
+import base64, io, os, re, warnings
 import numpy as np
 import pandas as pd
 import joblib
@@ -14,6 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
+import streamlit.components.v1 as components
 
 warnings.filterwarnings("ignore")
 
@@ -27,2760 +28,1573 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Paleta corporativa
-# ── Paleta institucional Universidad del Valle ────────────────────────────
-# Fuente: Manual de Identidad Visual Corporativa Univalle
+# ─────────────────────────────────────────────────────────────────────────────
+# PALETA — Manual de Identidad Visual Corporativa, Universidad del Valle (2024)
+#   · Color principal: Rojo Univalle #C20E1A (presente en todo el diseño).
+#   · Colores funcionales: #841F1C y neutrales de la paleta web #636363 / #CFCFCF.
+#   · Colores expresivos (#599876, #DC911B, #3D5AA2, #42A8BF, #523888): solo como
+#     acentos en los datos (semáforo Z'', series), nunca en la interfaz; el manual
+#     limita su uso a ≈ 10 % del espacio.
+#   · Tramas (100/75/50/25 %): el manual las admite en gráficos estadísticos.
+# ─────────────────────────────────────────────────────────────────────────────
+def trama(hex_color, pct):
+    """Trama de un color del manual al pct % (mezcla con blanco), como en el capítulo 'Tramas o tonos de color'."""
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    f = pct / 100
+    return "#{:02X}{:02X}{:02X}".format(*(round(255 - (255 - c) * f) for c in (r, g, b)))
+
+
 CLR = {
-    # Sistema cromático institucional
+    # Principal y funcionales (interfaz y datos)
     "rojo":         "#C20E1A",  # Rojo Univalle — color principal de marca
-    "granate":      "#841F1C",  # Granate oscuro — Z-Score / riesgo
-    "gris_oscuro":  "#636363",  # Gris funcional — endeudamiento / texto
-    "gris_medio":   "#555555",  # Gris medio — texto secundario (legible sobre blanco)
-    "gris_claro":   "#CFCFCF",  # Gris claro — bordes, separadores
-    "fondo":        "#F5F5F5",  # Fondo general — gris institucional muy claro
-    "tarjeta":      "#FFFFFF",  # Tarjetas — blanco puro
-    # Colores funcionales para datos (baja saturación)
-    "verde":        "#3D7A3D",  # Verde institucional — rentabilidad positiva
-    "verde_claro":  "#5A9A5A",  # Verde suave — valores positivos
-    "amarillo":     "#C8581A",  # Naranja — advertencias / alertas
-    "azul_claro":   "#3A6080",  # Azul grisáceo — clustering / datos neutros
-    "azul_medio":   "#CFCFCF",  # Usado para bordes en dark; ahora borde gris claro
-    "azul_oscuro":  "#1A1A1A",  # Texto principal — negro tipográfico
+    "granate":      "#841F1C",  # Color funcional
+    "gris_oscuro":  "#636363",  # Neutral de la paleta web — texto secundario y series neutras
+    "gris_medio":   "#636363",  # Alias del neutral oscuro
+    "gris_claro":   "#CFCFCF",  # Neutral de la paleta web — bordes de 1 px y separadores
+    "fondo":        trama("#CFCFCF", 25),  # Trama 25 % del neutral claro (#F3F3F3) — fondo general
+    "tarjeta":      "#FFFFFF",  # Blanco — superficie de tarjetas (espacio en blanco)
+    "azul_oscuro":  "#1A1A1A",  # Negro tipográfico — títulos y texto principal
+    # Expresivos del manual — solo para codificar datos
+    "verde":        "#599876",  # Semáforo: Zona Segura
+    "amarillo":     "#DC911B",  # Semáforo: Zona Alerta
+    "azul_claro":   "#3D5AA2",  # Serie de datos principal (azul expresivo)
+    "verde_claro":  trama("#599876", 75),  # Trama 75 % del verde para series secundarias
+    "cian":         "#42A8BF",
+    "morado":       "#523888",
+    "azul_medio":   "#CFCFCF",
 }
+
+# Tipografía — el manual define Helvetica Neue (Medium) como fuente institucional y,
+# para medios digitales, fuentes sin serifa seguras como Arial o Verdana.
+FUENTE_TITULOS = "'Helvetica Neue', Helvetica, Arial, sans-serif"
+FUENTE_TEXTO = "'Helvetica Neue', Helvetica, Arial, sans-serif"
 
 st.markdown(f"""
 <style>
-  /* ── SISTEMA GRÁFICO — UNIVERSIDAD DEL VALLE ──────────────────────────── */
-  /* Manual de Identidad Visual Corporativa | MAIN – Maestría en Analítica  */
+  /* ═══ SISTEMA GRÁFICO — UNIVERSIDAD DEL VALLE · diseño plano, sin sombras ═══ */
 
-  @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap');
-
-  /* Base */
-  .stApp {{
-      background-color:{CLR['fondo']};
-      font-family:Arial, 'Helvetica Neue', sans-serif;
-  }}
-  .block-container {{
-      padding-top:0;
-      padding-bottom:2rem;
-      max-width:1400px;
+  :root {{
+      --rojo:{CLR['rojo']}; --granate:{CLR['granate']}; --gris:{CLR['gris_oscuro']};
+      --gris-claro:{CLR['gris_claro']}; --fondo:{CLR['fondo']}; --negro:{CLR['azul_oscuro']};
   }}
 
-  /* ── Sidebar institucional ──────────────────────────────────────────── */
-  section[data-testid="stSidebar"] {{
-      background-color:#FFFFFF;
-      border-right:1px solid {CLR['gris_claro']};
-  }}
-  /* Solo texto del sidebar — NO usar * !important (bloquea todo) */
+  /* Sin sombras en ningún contenedor */
+  .stApp *, .stApp *::before, .stApp *::after {{ box-shadow:none !important; text-shadow:none !important; }}
+
+  /* Base y tipografía */
+  .stApp {{ background-color:var(--fondo); font-family:{FUENTE_TEXTO}; color:var(--negro); }}
+  .stApp p, .stApp li, .stApp label {{ font-family:{FUENTE_TEXTO}; }}
+  .block-container {{ padding-top:3.2rem; padding-bottom:3rem; max-width:1400px; }}
+  h1, h2, h3, h4 {{ font-family:{FUENTE_TITULOS} !important; color:var(--negro); }}
+
+  /* ── Sidebar ─────────────────────────────────────────────────────────── */
+  section[data-testid="stSidebar"] {{ background-color:#FFFFFF; border-right:1px solid var(--gris-claro); }}
   section[data-testid="stSidebar"] p,
   section[data-testid="stSidebar"] label,
   section[data-testid="stSidebar"] span:not([data-baseweb="tag"] span),
-  section[data-testid="stSidebar"] div.stMarkdown {{
-      color:{CLR['gris_oscuro']} !important;
-  }}
-  section[data-testid="stSidebar"] .stSelectbox > div > div,
-  section[data-testid="stSidebar"] .stMultiSelect > div > div {{
-      background:#FFFFFF !important;
-      border:1px solid {CLR['rojo']} !important;
-      border-radius:4px !important;
-  }}
+  section[data-testid="stSidebar"] div.stMarkdown {{ color:var(--gris) !important; }}
 
-  /* ── FIX multiselect tags — globales (sidebar y tabs) ───────────────── */
-  /* Los tags heredan primaryColor de Streamlit; se fuerza a institucional */
-  [data-baseweb="tag"] {{
-      background-color:{CLR['fondo']} !important;
-      border:1px solid {CLR['rojo']} !important;
-      border-radius:3px !important;
+  /* ── Controles de formulario: borde de 1 px, esquinas mínimas ───────── */
+  [data-baseweb="select"] > div,
+  .stNumberInput input, .stTextInput input {{
+      background:#FFFFFF !important; border:1px solid var(--gris-claro) !important; border-radius:2px !important;
+      color:var(--negro) !important; font-size:.82rem !important;
   }}
-  [data-baseweb="tag"] span {{
-      color:{CLR['gris_oscuro']} !important;
-      font-size:.78rem !important;
-  }}
-  [data-baseweb="tag"] svg,
-  [data-baseweb="tag"] button {{
-      fill:{CLR['gris_oscuro']} !important;
-      color:{CLR['gris_oscuro']} !important;
-  }}
-  /* Override del dropdown interno del multiselect */
-  [data-baseweb="select"] > div {{
-      background-color:#FFFFFF !important;
-      border-color:{CLR['gris_claro']} !important;
-  }}
-  [data-baseweb="menu"] {{
-      background:#FFFFFF !important;
-  }}
-  [data-baseweb="option"] {{
-      color:{CLR['gris_oscuro']} !important;
-      background:#FFFFFF !important;
-  }}
-  [data-baseweb="option"]:hover {{
-      background:{CLR['fondo']} !important;
-  }}
+  [data-baseweb="select"] > div:focus-within,
+  .stNumberInput input:focus, .stTextInput input:focus {{ border-color:var(--rojo) !important; }}
+  [data-baseweb="select"] [data-baseweb="value"], [data-baseweb="select"] span,
+  [data-baseweb="select"] input {{ color:var(--negro) !important; font-size:.82rem !important; }}
+  [data-baseweb="select"] input::placeholder {{ color:var(--gris) !important; }}
+  [data-baseweb="tag"] {{ background:#FFFFFF !important; border:1px solid var(--rojo) !important; border-radius:2px !important; }}
+  [data-baseweb="tag"] span {{ color:var(--rojo) !important; font-size:.76rem !important; font-weight:600; }}
+  [data-baseweb="tag"] svg {{ fill:var(--rojo) !important; color:var(--rojo) !important; }}
+  [data-baseweb="popover"], [data-baseweb="menu"] {{ background:#FFFFFF !important; border:1px solid var(--gris-claro) !important; border-radius:2px !important; }}
+  [data-baseweb="menu"] li, [data-baseweb="option"] {{ color:var(--negro) !important; font-size:.82rem !important; background:#FFFFFF !important; }}
+  [data-baseweb="menu"] li:hover, [data-baseweb="menu"] [aria-selected="true"] {{ background:var(--fondo) !important; color:var(--rojo) !important; }}
+  /* Streamlit ≥ 1.50 (react-aria): mismo estilo para selectores y etiquetas */
+  .stSelectbox .react-aria-ComboBox > [role="group"],
+  .stMultiSelect .react-aria-ComboBox > [role="group"] {{
+      background:#FFFFFF !important; border:1px solid var(--gris-claro) !important; border-radius:2px !important; }}
+  .stSelectbox .react-aria-ComboBox > [role="group"]:focus-within,
+  .stMultiSelect .react-aria-ComboBox > [role="group"]:focus-within {{ border-color:var(--rojo) !important; }}
+  .stSelectbox input, .stMultiSelect input {{ color:var(--negro) !important; font-size:.82rem !important; }}
+  [data-tag] {{ background:#FFFFFF !important; border:1px solid var(--rojo) !important; border-radius:2px !important;
+                color:var(--rojo) !important; }}
+  [data-tag] span {{ color:var(--rojo) !important; font-size:.76rem !important; font-weight:600; }}
+  [data-tag] button, [data-tag] svg {{ color:var(--rojo) !important; }}
+  [role="listbox"] {{ background:#FFFFFF !important; border:1px solid var(--gris-claro) !important; border-radius:2px !important; }}
+  [role="listbox"] [role="option"] {{ color:var(--negro) !important; font-size:.82rem !important; }}
+  [role="listbox"] [role="option"]:hover, [role="listbox"] [role="option"][data-focused] {{ background:var(--fondo) !important; color:var(--rojo) !important; }}
+  .stCheckbox [data-testid="stCheckbox"] span, [data-baseweb="checkbox"] > div {{ border-radius:2px !important; }}
 
-  /* ── Franja superior roja institucional (sistema gráfico Univalle) ──── */
-  /* Aplicada mediante el encabezado dash-header */
-  .dash-header {{
-      background-color:#FFFFFF;
-      padding:0;
-      margin-bottom:1.4rem;
-      border-bottom:1px solid {CLR['gris_claro']};
-  }}
-  .dash-header-stripe {{
-      background-color:{CLR['rojo']};
-      height:6px;
-      width:100%;
-  }}
-  .dash-header-body {{
-      padding:1.1rem 1.5rem 1rem;
-      display:flex;
-      align-items:flex-start;
-      gap:1.4rem;
-  }}
-  .dash-header-logo {{
-      flex-shrink:0;
-  }}
-  .dash-header-logo-mark {{
-      width:36px;height:36px;
-      background:{CLR['rojo']};
-      display:flex;align-items:center;justify-content:center;
-      position:relative;
-  }}
-  .dash-header-logo-mark::after {{
-      content:'';
-      position:absolute;
-      bottom:6px;left:50%;
-      transform:translateX(-50%);
-      border-left:8px solid transparent;
-      border-right:8px solid transparent;
-      border-top:10px solid #FFFFFF;
-  }}
-  .dash-header-texts {{flex:1;}}
-  .dash-header-pretitle {{
-      font-size:.72rem;
-      color:{CLR['rojo']};
-      font-family:'Montserrat',Arial,sans-serif;
-      font-weight:600;
-      letter-spacing:.08em;
-      text-transform:uppercase;
-      margin-bottom:.25rem;
-  }}
-  .dash-header h1 {{
-      font-family:'Montserrat',Arial,sans-serif;
-      font-size:1.35rem;
-      font-weight:700;
-      color:{CLR['gris_oscuro']};
-      margin:0 0 .2rem;
-      line-height:1.3;
-  }}
-  .dash-header h1 span.titulo-rojo {{color:{CLR['rojo']};}}
-  .dash-header p {{
-      font-size:.8rem;
-      color:#444444;
-      margin:0;
-      line-height:1.5;
-  }}
-  .dash-header-meta {{
-      display:flex;
-      gap:1.5rem;
-      margin-top:.5rem;
-      padding-top:.5rem;
-      border-top:1px solid {CLR['gris_claro']};
-  }}
-  .dash-header-meta-item {{
-      font-size:.72rem;
-      color:{CLR['gris_oscuro']};
-  }}
-  .dash-header-meta-item span {{
-      color:{CLR['rojo']};
-      font-weight:600;
-  }}
+  /* ── Encabezado ──────────────────────────────────────────────────────── */
+  .dash-header {{ background:#FFFFFF; border:1px solid var(--gris-claro); border-top:6px solid var(--rojo); margin-bottom:1.6rem; }}
+  .dash-header-stripe {{ display:none; }}
+  .dash-header-body {{ padding:1.4rem 1.8rem 1.2rem; display:flex; align-items:flex-start; gap:1.4rem; }}
+  .dash-header-logo {{ flex-shrink:0; }}
+  .dash-header-texts {{ flex:1; }}
+  .dash-header-pretitle {{ font-family:{FUENTE_TITULOS}; font-size:.7rem; font-weight:600; letter-spacing:.08em;
+                           text-transform:uppercase; color:var(--rojo); margin-bottom:.35rem; }}
+  .dash-header h1 {{ font-family:{FUENTE_TITULOS}; font-size:1.5rem; font-weight:700; color:var(--negro);
+                     margin:0 0 .3rem; padding:0; line-height:1.3; }}
+  .dash-header h1 span.titulo-rojo {{ color:var(--rojo); }}
+  .dash-header p {{ font-size:.85rem; color:var(--gris); margin:0; line-height:1.5; }}
+  .dash-header-meta {{ display:flex; flex-wrap:wrap; gap:2rem; margin-top:.8rem; padding-top:.7rem; border-top:1px solid var(--gris-claro); }}
+  .dash-header-meta-item {{ font-size:.74rem; color:var(--gris); }}
+  .dash-header-meta-item span {{ color:var(--negro); font-weight:700; }}
 
-  /* ── Tarjetas KPI ───────────────────────────────────────────────────── */
-  .kpi-card {{
-      background:#FFFFFF;
-      border:1px solid {CLR['gris_claro']};
-      border-radius:6px;
-      padding:1rem 1.1rem;
-      text-align:left;
-      box-shadow:0 1px 3px rgba(0,0,0,.06);
-  }}
-  .kpi-title {{
-      font-size:.72rem;
-      color:#444444;
-      font-family:'Montserrat',Arial,sans-serif;
-      font-weight:600;
-      letter-spacing:.04em;
-      text-transform:uppercase;
-      margin-bottom:.4rem;
-  }}
-  .kpi-value {{
-      font-size:1.9rem;
-      font-weight:700;
-      color:{CLR['gris_oscuro']};
-      font-family:'Montserrat',Arial,sans-serif;
-      line-height:1;
-  }}
-  .kpi-sub {{
-      font-size:.72rem;
-      color:#555555;
-      margin-top:.3rem;
-  }}
-  /* Indicadores de estado — borde izquierdo fino */
-  .kpi-safe   {{border-left:3px solid {CLR['verde']} !important;}}
-  .kpi-warn   {{border-left:3px solid {CLR['amarillo']} !important;}}
-  .kpi-danger {{border-left:3px solid {CLR['rojo']} !important;}}
-  .kpi-info   {{border-left:3px solid {CLR['gris_oscuro']} !important;}}
+  /* ── Tarjetas KPI: superficie blanca, borde 1 px, acento superior ───── */
+  .kpi-card {{ background:#FFFFFF; border:1px solid var(--gris-claro); border-top:3px solid var(--gris);
+               border-radius:0; padding:1.1rem 1.2rem 1rem; height:100%; }}
+  .kpi-title {{ font-family:{FUENTE_TITULOS}; font-size:.68rem; font-weight:600; letter-spacing:.06em;
+                text-transform:uppercase; color:var(--gris); margin-bottom:.55rem; }}
+  .kpi-value {{ font-family:{FUENTE_TITULOS}; font-size:1.85rem; font-weight:700; color:var(--negro); line-height:1.05; }}
+  .kpi-sub {{ font-size:.74rem; color:var(--gris); margin-top:.45rem; line-height:1.45; }}
+  .kpi-safe   {{ border-top-color:{CLR['verde']} !important; }}
+  .kpi-warn   {{ border-top-color:{CLR['amarillo']} !important; }}
+  .kpi-danger {{ border-top-color:var(--rojo) !important; }}
+  .kpi-info   {{ border-top-color:var(--gris) !important; }}
 
-  /* ── Encabezados de sección ─────────────────────────────────────────── */
-  .section-header {{
-      font-family:'Montserrat',Arial,sans-serif;
-      font-size:.85rem;
-      font-weight:600;
-      color:#222222;
-      border-bottom:2px solid {CLR['rojo']};
-      padding-bottom:.35rem;
-      margin-bottom:.9rem;
-      letter-spacing:.01em;
-  }}
+  /* ── Títulos de sección ──────────────────────────────────────────────── */
+  .section-header {{ font-family:{FUENTE_TITULOS}; font-size:.95rem; font-weight:700; color:var(--negro);
+                     border-bottom:1px solid var(--gris-claro); padding-bottom:.45rem; margin:1.6rem 0 .9rem;
+                     position:relative; }}
+  .section-header::after {{ content:''; position:absolute; left:0; bottom:-1px; width:48px; height:2px; background:var(--rojo); }}
 
-  /* Separador de sección (línea roja delgada) */
-  .sep-rojo {{
-      border:none;
-      border-top:1px solid {CLR['rojo']};
-      margin:1.5rem 0;
-      opacity:.35;
-  }}
+  /* ── Lectura del gráfico: bloque plano ──────────────────────────────── */
+  .interp-box {{ background:#FFFFFF; border:1px solid var(--gris-claro); border-left:3px solid var(--granate);
+                 border-radius:0; padding:.85rem 1.1rem; margin:.4rem 0 1.2rem; font-size:.84rem;
+                 color:var(--negro); line-height:1.65; }}
+  .interp-box b {{ color:var(--granate); font-family:{FUENTE_TITULOS}; font-weight:600; }}
 
-  /* ── Caja de interpretación / insight ─────────────────────────────── */
-  .interp-box {{
-      background:#FFFFFF;
-      border-radius:4px;
-      padding:.7rem 1rem;
-      border-left:3px solid {CLR['gris_claro']};
-      margin:.5rem 0;
-      font-size:.8rem;
-      color:{CLR['gris_oscuro']};
-      line-height:1.65;
-      box-shadow:0 1px 2px rgba(0,0,0,.04);
-  }}
-  .interp-box b {{color:{CLR['gris_oscuro']};}}
+  /* ── Pestañas ────────────────────────────────────────────────────────── */
+  .stTabs [data-baseweb="tab-list"], .stTabs [role="tablist"] {{ background:#FFFFFF; border:1px solid var(--gris-claro);
+                                       border-bottom:2px solid var(--rojo); gap:0; padding:0 .4rem; flex-wrap:wrap; }}
+  .stTabs [data-baseweb="tab"], .stTabs [role="tab"] {{ font-family:{FUENTE_TITULOS}; font-size:.76rem; font-weight:500; color:var(--gris) !important;
+                                  padding:.7rem .5rem; background:transparent !important; border-radius:0; white-space:nowrap; }}
+  .stTabs [data-baseweb="tab"]:hover, .stTabs [role="tab"]:hover {{ color:var(--rojo) !important; }}
+  .stTabs [aria-selected="true"] {{ color:var(--rojo) !important; font-weight:700 !important; }}
+  .stTabs [data-baseweb="tab-highlight"] {{ background-color:var(--rojo) !important; height:3px; }}
+  .stTabs [data-baseweb="tab-border"] {{ display:none; }}
+  .stTabs [data-baseweb="tab-panel"] {{ padding-top:1.2rem; }}
 
-  /* ── Pestañas ───────────────────────────────────────────────────────── */
-  .stTabs [data-baseweb="tab-list"] {{
-      background:#FFFFFF;
-      border-bottom:2px solid {CLR['rojo']};
-      border-radius:0;
-      padding:0;
-      gap:0;
-  }}
-  .stTabs [data-baseweb="tab"] {{
-      font-family:'Montserrat',Arial,sans-serif;
-      font-size:.8rem;
-      font-weight:600;
-      color:#841F1C !important;
-      border-radius:0;
-      padding:.55rem 1.1rem;
-      border-bottom:2px solid transparent;
-      margin-bottom:-2px;
-      background:transparent !important;
-      opacity:1 !important;
-  }}
-  .stTabs [data-baseweb="tab"]:hover {{
-      opacity:.85 !important;
-      background:transparent !important;
-  }}
-  .stTabs [aria-selected="true"] {{
-      color:{CLR['rojo']} !important;
-      font-weight:700 !important;
-      border-bottom:2px solid {CLR['rojo']} !important;
-      background:transparent !important;
-      opacity:1 !important;                  /* activa: rojo completo */
-  }}
-  /* Fondo del contenido de las pestañas */
-  .stTabs [data-baseweb="tab-panel"] {{
-      background:{CLR['fondo']};
-      padding-top:1rem;
-  }}
+  /* ── Contenedores de gráficos y tablas: superficie blanca, 1 px ─────── */
+  [data-testid="stPlotlyChart"] {{ background:#FFFFFF; border:1px solid var(--gris-claro); padding:.6rem .6rem .2rem; }}
+  [data-testid="stDataFrame"] {{ border:1px solid var(--gris-claro); }}
+  [data-testid="stExpander"] details {{ background:#FFFFFF; border:1px solid var(--gris-claro) !important; border-radius:0 !important; }}
+  [data-testid="stExpander"] summary {{ font-family:{FUENTE_TITULOS}; font-size:.82rem; font-weight:600; color:var(--negro); }}
+  [data-testid="stExpander"] summary:hover {{ color:var(--rojo); }}
+  [data-testid="stFileUploader"] section {{ background:#FFFFFF; border:1px dashed var(--gris-claro); border-radius:0; }}
+  hr {{ border:none !important; border-top:1px solid var(--gris-claro) !important; margin:1.8rem 0 !important; }}
 
-  /* ── Metrica override ───────────────────────────────────────────────── */
-  [data-testid="metric-container"] {{
-      background:#FFFFFF;
-      border-radius:6px;
-      padding:.6rem;
-      border:1px solid {CLR['gris_claro']};
-      box-shadow:0 1px 2px rgba(0,0,0,.04);
-  }}
+  /* ── Botones ─────────────────────────────────────────────────────────── */
+  .stButton > button[kind="primary"], .stDownloadButton > button {{
+      background:var(--rojo) !important; color:#FFFFFF !important; border:1px solid var(--rojo) !important; border-radius:2px !important;
+      font-family:{FUENTE_TITULOS} !important; font-weight:600 !important; font-size:.82rem !important; }}
+  .stButton > button[kind="primary"]:hover, .stDownloadButton > button:hover {{ background:var(--granate) !important; border-color:var(--granate) !important; }}
+  .stButton > button[kind="secondary"] {{ background:#FFFFFF !important; color:var(--negro) !important;
+      border:1px solid var(--gris-claro) !important; border-radius:2px !important; }}
 
-  /* ── Scrollbar discreta ─────────────────────────────────────────────── */
-  ::-webkit-scrollbar {{width:4px;}}
-  ::-webkit-scrollbar-thumb {{background:{CLR['gris_claro']};border-radius:2px;}}
+  /* ── Radio horizontal ───────────────────────────────────────────────── */
+  .stRadio [role="radiogroup"] label {{ font-size:.82rem; }}
 
-  /* ── Ficha metodológica de indicador ───────────────────────────────── */
-  .ficha-ind {{
-      background:#FFFFFF;
-      border-radius:6px;
-      border:1px solid {CLR['gris_claro']};
-      padding:0;
-      overflow:hidden;
-      margin:.6rem 0;
-      box-shadow:0 1px 3px rgba(0,0,0,.05);
-  }}
-  .ficha-top {{
-      background:{CLR['fondo']};
-      border-bottom:2px solid {CLR['rojo']};
-      padding:.6rem 1rem;
-      display:flex;
-      align-items:center;
-      gap:.5rem;
-  }}
-  .ficha-top-icon {{display:none;}}  /* Eliminar iconos decorativos */
-  .ficha-top-title {{
-      color:{CLR['gris_oscuro']};
-      font-weight:600;
-      font-size:.88rem;
-      font-family:'Montserrat',Arial,sans-serif;
-  }}
-  .ficha-top-tag {{
-      margin-left:auto;
-      font-size:.65rem;
-      padding:2px 8px;
-      border-radius:2px;
-      background:{CLR['rojo']};
-      color:#FFFFFF;
-      font-weight:600;
-      letter-spacing:.04em;
-      text-transform:uppercase;
-      white-space:nowrap;
-  }}
-  .ficha-body {{padding:.8rem 1rem;}}
-  .ficha-simple {{
-      background:{CLR['fondo']};
-      border-left:2px solid {CLR['gris_oscuro']};
-      border-radius:0 4px 4px 0;
-      padding:.6rem .9rem;
-      margin-bottom:.65rem;
-      font-size:.8rem;
-      color:{CLR['gris_oscuro']};
-      line-height:1.65;
-  }}
-  .ficha-simple .etiqueta {{
-      font-size:.65rem;
-      font-weight:600;
-      color:{CLR['gris_oscuro']};
-      text-transform:uppercase;
-      letter-spacing:.05em;
-      margin-bottom:.2rem;
-      font-family:'Montserrat',Arial,sans-serif;
-  }}
-  .ficha-tecnico {{
-      background:#FFFFFF;
-      border-left:2px solid {CLR['gris_claro']};
-      border-radius:0 4px 4px 0;
-      padding:.6rem .9rem;
-      margin-bottom:.65rem;
-      font-size:.78rem;
-      color:{CLR['gris_oscuro']};
-      line-height:1.65;
-  }}
-  .ficha-tecnico .etiqueta {{
-      font-size:.65rem;
-      font-weight:600;
-      color:#555555;
-      text-transform:uppercase;
-      letter-spacing:.05em;
-      margin-bottom:.2rem;
-      font-family:'Montserrat',Arial,sans-serif;
-  }}
-  .ficha-formula {{
-      font-family:'Courier New',monospace;
-      font-size:.78rem;
-      background:{CLR['fondo']};
-      color:{CLR['gris_oscuro']};
-      border:1px solid {CLR['gris_claro']};
-      padding:.4rem .8rem;
-      border-radius:3px;
-      margin:.4rem 0 .65rem;
-      display:inline-block;
-      width:100%;
-  }}
-  .ficha-semaforo {{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.2rem;}}
-  .nivel {{
-      padding:.22rem .7rem;
-      border-radius:2px;
-      font-size:.7rem;
-      font-weight:600;
-      white-space:nowrap;
-      font-family:'Montserrat',Arial,sans-serif;
-  }}
-  .nivel-verde   {{background:rgba(61,122,61,.08);color:{CLR['verde']};
-                   border:1px solid {CLR['verde']};}}
-  .nivel-amarillo{{background:rgba(200,88,26,.08);color:{CLR['amarillo']};
-                   border:1px solid {CLR['amarillo']};}}
-  .nivel-rojo    {{background:rgba(194,14,26,.08);color:{CLR['rojo']};
-                   border:1px solid {CLR['rojo']};}}
-  .nivel-gris    {{background:{CLR['fondo']};color:{CLR['gris_medio']};
-                   border:1px solid {CLR['gris_claro']};}}
-
-  /* ── Glosario ───────────────────────────────────────────────────────── */
-  .glos-grid {{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;margin:.6rem 0;}}
-
-  /* ── Expander institucional ─────────────────────────────────────────── */
-  .streamlit-expanderHeader {{
-      background:#FFFFFF !important;
-      border-radius:4px !important;
-      color:{CLR['gris_oscuro']} !important;
-      font-size:.8rem !important;
-      font-family:'Montserrat',Arial,sans-serif !important;
-      font-weight:600 !important;
-      border:1px solid {CLR['gris_claro']} !important;
-  }}
-  .streamlit-expanderContent {{
-      background:#FFFFFF;
-      border-radius:0 0 4px 4px;
-      border:1px solid {CLR['gris_claro']};
-      border-top:0;
-      padding:.7rem .9rem;
-  }}
-
-  /* ── Botón principal ────────────────────────────────────────────────── */
-  .stButton > button[kind="primary"] {{
-      background-color:{CLR['rojo']} !important;
-      color:#FFFFFF !important;
-      border:none !important;
-      border-radius:3px !important;
-      font-family:'Montserrat',Arial,sans-serif !important;
-      font-weight:600 !important;
-      font-size:.82rem !important;
-      padding:.5rem 1.2rem !important;
-  }}
-  .stButton > button[kind="secondary"],
-  .stButton > button:not([kind]) {{
-      background-color:#FFFFFF !important;
-      color:{CLR['gris_oscuro']} !important;
-      border:1px solid {CLR['gris_claro']} !important;
-      border-radius:3px !important;
-      font-family:'Montserrat',Arial,sans-serif !important;
-      font-size:.82rem !important;
-  }}
-
-  /* ── Dataframe / table ──────────────────────────────────────────────── */
-  .stDataFrame {{border-radius:4px !important;}}
-  [data-testid="stDataFrame"] th {{
-      background-color:{CLR['fondo']} !important;
-      color:{CLR['gris_oscuro']} !important;
-      font-family:'Montserrat',Arial,sans-serif !important;
-      font-weight:600 !important;
-      font-size:.78rem !important;
-      border-bottom:2px solid {CLR['rojo']} !important;
-  }}
-  [data-testid="stDataFrame"] td {{
-      font-size:.78rem !important;
-      color:{CLR['gris_oscuro']} !important;
-  }}
-
-  /* ── Number input ───────────────────────────────────────────────────── */
-  .stNumberInput > div > div > input {{
-      border:1px solid {CLR['gris_claro']} !important;
-      border-radius:3px !important;
-      font-size:.82rem !important;
-      background:#FFFFFF !important;
-      color:{CLR['gris_oscuro']} !important;
-  }}
-  .stTextInput > div > div > input {{
-      border:1px solid {CLR['gris_claro']} !important;
-      border-radius:3px !important;
-      font-size:.82rem !important;
-      color:{CLR['gris_oscuro']} !important;
-  }}
-  .stSelectbox > div > div {{
-      border:1px solid {CLR['gris_claro']} !important;
-      border-radius:3px !important;
-  }}
-
-  /* ── FIX texto visible en selectbox sidebar (Año de análisis) ───────── */
-  /* Streamlit hereda colores del tema en el valor seleccionado del select  */
-  [data-baseweb="select"] [data-baseweb="value"],
-  [data-baseweb="select"] [data-baseweb="value"] span,
-  [data-baseweb="select"] [data-baseweb="input"] input,
-  [data-baseweb="select"] > div > div > div,
-  [data-baseweb="select"] > div > div span {{
-      color:{CLR['gris_oscuro']} !important;
-      font-size:.82rem !important;
-  }}
-  /* Placeholder text */
-  [data-baseweb="select"] [data-baseweb="input"] input::placeholder {{
-      color:#999999 !important;
-  }}
-  /* Dropdown options list */
-  [data-baseweb="popover"] [data-baseweb="menu"] li {{
-      color:{CLR['gris_oscuro']} !important;
-      font-size:.82rem !important;
-      background:#FFFFFF !important;
-  }}
-  [data-baseweb="popover"] [data-baseweb="menu"] li:hover,
-  [data-baseweb="popover"] [data-baseweb="menu"] [aria-selected="true"] {{
-      background:{CLR['fondo']} !important;
-      color:{CLR['rojo']} !important;
-  }}
+  /* Scrollbar discreta */
+  ::-webkit-scrollbar {{ width:6px; height:6px; }}
+  ::-webkit-scrollbar-thumb {{ background:var(--gris-claro); }}
 </style>
 """, unsafe_allow_html=True)
 
+# Evita que el traductor automático del navegador reescriba la página: si Chrome traduce,
+# React no puede actualizar los textos y estos quedan "congelados" al cambiar los filtros.
+st.markdown('<meta name="google" content="notranslate">', unsafe_allow_html=True)
+components.html("""<script>
+  const d = window.parent.document;
+  d.documentElement.setAttribute('lang', 'es');
+  d.documentElement.setAttribute('translate', 'no');
+  d.documentElement.classList.add('notranslate');
+  d.body.classList.add('notranslate');
+</script>""", height=0)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. CARGA DE DATOS Y MODELOS (con caché)
+#    Fuente: panel exportado por el cuaderno V12 (mi_dataset_final.csv) y
+#    artefactos de modelos_exportados/. El dashboard NO recalcula el Z'':
+#    usa el Z'' CALCULADO en el cuaderno (decisión metodológica del proyecto).
 # ─────────────────────────────────────────────────────────────────────────────
-BASE = os.path.dirname(__file__)
+BASE = os.path.dirname(os.path.abspath(__file__))
+AÑOS = [2021, 2022, 2023, 2024]
+ZONAS = ["🔴 Zona Crítica", "🟡 Zona Alerta", "🟢 Zona Segura"]
+MAPA_ZONA = {"Zona Crítica": "🔴 Zona Crítica", "Zona Alerta": "🟡 Zona Alerta", "Zona Segura": "🟢 Zona Segura"}
+SIN_Z = "⚪ Sin Z calculado"
+N_MIN_SECTOR = 10          # mínimo de empresas para interpretar una mediana sectorial
+ORDEN_TAM = ["Microempresa", "Pequeña", "Mediana", "Grande", "Sin dato"]
 
 SECTOR_CORTO = {
-    "A – Agricultura y ganadería":                       "A – Agricultura",
-    "B – Explotación de minas y canteras":               "B – Minería",
-    "C – Industria manufacturera":                       "C – Manufactura",
-    "D – Electricidad, gas, vapor":                      "D – Electricidad",
-    "F – Construcción":                                  "F – Construcción",
-    "G – Comercio al por mayor y menor":                 "G – Comercio",
-    "H – Transporte y almacenamiento":                   "H – Transporte",
-    "I – Alojamiento y gastronomía":                     "I – Alojamiento",
-    "J – Información y comunicaciones":                  "J – Información",
-    "K – Actividades financieras y de seguros":          "K – Financiero",
-    "L – Actividades inmobiliarias":                     "L – Inmobiliario",
-    "M – Actividades profesionales y científicas":       "M – Profesionales",
-    "N – Actividades de servicios administrativos":      "N – Administrativos",
-    "P – Educación":                                     "P – Educación",
-    "Q – Salud y servicios sociales":                    "Q – Salud",
-    "R – Arte, entretenimiento y recreación":            "R – Arte/Recreación",
-    "S – Otras actividades de servicios":                "S – Otros servicios",
-    "Sin clasificar":                                    "Sin clasificar",
+    "A – Agricultura y ganadería":                  "A – Agricultura",
+    "B – Explotación de minas y canteras":          "B – Minería",
+    "C – Industria manufacturera":                  "C – Manufactura",
+    "D – Electricidad, gas, vapor":                 "D – Electricidad",
+    "E – Agua y saneamiento":                       "E – Agua y saneamiento",
+    "F – Construcción":                             "F – Construcción",
+    "G – Comercio al por mayor y menor":            "G – Comercio",
+    "H – Transporte y almacenamiento":              "H – Transporte",
+    "I – Alojamiento y gastronomía":                "I – Alojamiento",
+    "J – Información y comunicaciones":             "J – Información",
+    "K – Actividades financieras y de seguros":     "K – Financiero",
+    "L – Actividades inmobiliarias":                "L – Inmobiliario",
+    "M – Actividades profesionales y científicas":  "M – Profesionales",
+    "N – Actividades de servicios administrativos": "N – Administrativos",
+    "P – Educación":                                "P – Educación",
+    "Q – Salud y servicios sociales":               "Q – Salud",
+    "R – Arte, entretenimiento y recreación":       "R – Arte/Recreación",
+    "S – Otras actividades de servicios":           "S – Otros servicios",
 }
 
+# Nombres del CSV → nombres de visualización (coinciden con las columnas del cuaderno)
+RENOMBRE = {
+    "Compania": "Compañía", "Seccion_CIIU": "Sección CIIU", "Clasificacion_Tamaño": "Tamaño 2024",
+    "Clasificacion_957_Año": "Tamaño (UVT del año)",
+    "Razon_Liquidez": "Razón De Liquidez (x)", "Prueba_Acida": "Prueba Ácida (x)",
+    "Razon_Efectivo": "Razón De Efectivo (x)", "Deuda_Activos_pct": "Deuda / Activos (%)",
+    "Deuda_Capital_pct": "Relación Deuda/Capital (%)", "Deuda_Neta_EBITDA": "Deuda Neta / EBITDA (x)",
+    "ROA_pct": "Rendimiento Sobre Los Activos (ROA) (%)", "ROE_pct": "Rendimiento Sobre El Patrimonio (ROE) (%)",
+    "Margen_Operacional_pct": "Margen Operacional (%)", "Margen_Neto_pct": "Margen Neto (%)",
+    "Margen_EBITDA_pct": "Margen Ebitda (%)", "Activos_Totales": "Activos Totales",
+    "Pasivos_Totales": "Pasivos Totales", "Patrimonio_Total": "Total de patrimonio",
+    "Ingresos_Operativos": "Total Ingreso Operativo", "Utilidad_Neta": "Ganancia (Pérdida) Neta",
+    "EBIT": "Ganancia operativa (EBIT)", "Capital_Trabajo": "Capital De Trabajo",
+}
+# Atajos de columnas (formato largo)
+LIQ, ACI, EFE = "Razón De Liquidez (x)", "Prueba Ácida (x)", "Razón De Efectivo (x)"
+DFA, DCAP, DNE = "Deuda / Activos (%)", "Relación Deuda/Capital (%)", "Deuda Neta / EBITDA (x)"
+PAS_ACT = "Pasivos/Activos (%)"
+ROA, ROE = "Rendimiento Sobre Los Activos (ROA) (%)", "Rendimiento Sobre El Patrimonio (ROE) (%)"
+MOP, MNE, MEB = "Margen Operacional (%)", "Margen Neto (%)", "Margen Ebitda (%)"
+ZC = "ZScore_Calculado"
+
+
+# Formato numérico colombiano: punto para miles, coma para decimales
+def fmt(v, dec=2, suf=""):
+    return "—" if v is None or pd.isna(v) else f"{v:,.{dec}f}{suf}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+CARPETAS_BUSQUEDA = [BASE, os.getcwd(), os.path.join(BASE, "final2"), os.path.join(BASE, "data"),
+                     os.path.join(BASE, "datos"), os.path.dirname(BASE)]
+
+
+def _ruta(nombre, carpeta=None):
+    """Busca un archivo junto al dashboard, en la carpeta desde donde se ejecuta y en subcarpetas habituales."""
+    for raiz in dict.fromkeys(CARPETAS_BUSQUEDA):
+        for r in ([os.path.join(raiz, carpeta, nombre)] if carpeta else []) + [os.path.join(raiz, nombre)]:
+            if os.path.exists(r):
+                return r
+    return None
+
+
 @st.cache_data(show_spinner="⏳ Cargando dataset financiero…")
-def load_data():
-    df = pd.read_csv(os.path.join(BASE, "mi_dataset_final.csv"), low_memory=False)
+def load_data(fuente):
+    """fuente: ruta del CSV o bytes de un archivo cargado desde la pantalla."""
+    if fuente is None:
+        return None, None, "no_encontrado"
+    try:
+        panel = pd.read_csv(io.BytesIO(fuente) if isinstance(fuente, bytes) else fuente, low_memory=False)
+    except Exception as e:
+        return None, None, f"No fue posible leer el archivo CSV: {e}"
+    faltan = [c for c in ["ZScore_Calculado", "Rol_Modelo_Multivariado", "Zona_ZScore", "Clasificacion_957_Año"] if c not in panel.columns]
+    if faltan:
+        return None, None, ("El archivo 'mi_dataset_final.csv' corresponde a una versión anterior del cuaderno (le faltan las columnas "
+                            + ", ".join(faltan) + "). Use el CSV que exporta V12_Trabajo_Integrador_Auditado.ipynb.")
+    panel = panel.rename(columns=RENOMBRE)
+    panel["Año"] = panel["Año"].astype(int)
+    panel["Sector_Corto"] = panel["Sección CIIU"].map(SECTOR_CORTO).fillna(panel["Sección CIIU"])
+    panel["Zona"] = panel["Zona_ZScore"].map(MAPA_ZONA).fillna(SIN_Z)
+    panel[PAS_ACT] = panel["Pasivos Totales"] / panel["Activos Totales"].replace(0, np.nan) * 100
+    for c in ["Alerta_Calidad_Dato", "Patrimonio_Negativo"]:
+        panel[c] = panel[c].astype(str).str.lower().isin(["true", "1"])
+    # Formato ancho (una fila por empresa) para el módulo multivariado y la matriz de transición
+    valores = [c for c in panel.columns if c not in ("Compañía", "Año") and not re.search(r"_20\d{2}$", c)]
+    wide = panel.set_index(["Compañía", "Año"])[valores].unstack("Año")
+    wide.columns = [f"{c} {a}" for c, a in wide.columns]
+    estaticas = panel.groupby("Compañía")[["Sección CIIU", "Sector_Corto", "Cluster_Label",
+                                           "Cluster_KMeans", "Rol_Modelo_Multivariado"]].first()
+    wide = estaticas.join(wide).reset_index()
+    return panel, wide, None
 
-    # ── NORMALIZACIÓN DE NOMBRES DE COLUMNA ──────────────────────────────────
-    # El cuaderno reconstruido exporta el CSV con nombres limpios (sin tildes,
-    # sin espacios). El dashboard necesita los nombres estandarizados.
-    # Este bloque detecta qué versión del CSV está cargada y adapta en consecuencia.
 
-    RENOMBRE_INVERSO = {
-        # Columnas de identificación
-        "Compania":           "Compañía",
-        "Seccion_CIIU":       "Sección CIIU",
-        "Clasificacion_Tamaño": "Clasificación_957",
-        # Liquidez
-        "Razon_Liquidez":     "Razón De Liquidez (x)",
-        "Prueba_Acida":       "Prueba Ácida (x)",
-        "Razon_Efectivo":     "Razón De Efectivo (x)",
-        # Endeudamiento
-        "Deuda_Activos_pct":  "Deuda / Activos (%)",
-        "Deuda_Capital_pct":  "Relación Deuda/Capital (%)",
-        "Deuda_Neta_EBITDA":  "Deuda Neta / EBITDA (x)",
-        "ZScore_Altman":      "Modelo Z-Score de Altman",
-        # Rentabilidad
-        "ROA_pct":            "Rendimiento Sobre Los Activos (ROA) (%)",
-        "ROE_pct":            "Rendimiento Sobre El Patrimonio (ROE) (%)",
-        "Margen_Operacional_pct": "Margen Operacional (%)",
-        "Margen_Neto_pct":    "Margen Neto (%)",
-        "Margen_EBITDA_pct":  "Margen Ebitda (%)",
-        # Financieras base
-        "Activos_Totales":    "Activos Totales",
-        "Pasivos_Totales":    "Pasivos Totales",
-        "Patrimonio_Total":   "Total de patrimonio",
-        "Ingresos_Operativos":"Total Ingreso Operativo",
-        "Utilidad_Neta":      "Ganancia (Pérdida) Neta",
-        "EBIT":               "Ganancia operativa (EBIT)",
-        "Capital_Trabajo":    "Capital De Trabajo",
-    }
-
-    # Renombrar solo las columnas que existen en el CSV con el nombre nuevo
-    cols_a_renombrar = {k: v for k, v in RENOMBRE_INVERSO.items() if k in df.columns}
-    if cols_a_renombrar:
-        df = df.rename(columns=cols_a_renombrar)
-
-    # Para métricas financieras con año embebido (ej. Razon_Liquidez 2024
-    # → Razón De Liquidez (x) 2024), el rename por año se hace genérico:
-    # El CSV del cuaderno reconstruido guarda los nombres limpios + año separado
-    # porque los genera desde el panel de datos. No requiere renombre adicional
-    # ya que las columnas métricas llevan el nombre base sin año como prefijo.
-
-    # ── COLUMNA Sección CIIU ─────────────────────────────────────────────────
-    # Determinar qué columna de sector existe después del posible renombre
-    col_sector = None
-    for candidato in ["Sección CIIU", "Seccion_CIIU", "Sector_CIIU"]:
-        if candidato in df.columns:
-            col_sector = candidato
-            break
-
-    if col_sector is None:
-        # Último recurso: buscar cualquier columna que contenga "CIIU" o "sector"
-        candidatos = [c for c in df.columns if "CIIU" in c or "ector" in c.lower()]
-        if candidatos:
-            col_sector = candidatos[0]
-
-    if col_sector:
-        # Estandarizar al nombre que usa el resto del dashboard
-        if col_sector != "Sección CIIU":
-            df = df.rename(columns={col_sector: "Sección CIIU"})
-        df["Sector_Corto"] = df["Sección CIIU"].map(SECTOR_CORTO).fillna(df["Sección CIIU"])
-    else:
-        df["Sección CIIU"] = "Sin clasificar"
-        df["Sector_Corto"] = "Sin clasificar"
-
-    # ── COLUMNA Clasificación_957 ────────────────────────────────────────────
-    for candidato in ["Clasificación_957", "Clasificacion_Tamaño",
-                      "Clasificacion_Tamano", "Tamaño"]:
-        if candidato in df.columns and candidato != "Clasificación_957":
-            df = df.rename(columns={candidato: "Clasificación_957"})
-            break
-
-    # ── COLUMNA Compañía ─────────────────────────────────────────────────────
-    for candidato in ["Compañía", "Compania", "Empresa", "Company"]:
-        if candidato in df.columns and candidato != "Compañía":
-            df = df.rename(columns={candidato: "Compañía"})
-            break
-
-    # ── RECONSTRUIR columnas de métricas con año si vienen en formato panel ──
-    # El CSV del cuaderno reconstruido puede traer la columna "Año" y las
-    # métricas sin año. En ese caso hay que pivotear a formato wide.
-    if "Año" in df.columns and "Compañía" in df.columns:
-        años_csv = df["Año"].dropna().unique()
-        # Solo pivotar si las columnas métricas NO tienen año embebido
-        cols_sin_año = [c for c in df.columns
-                        if not any(str(a) in c for a in [2021, 2022, 2023, 2024])
-                        and c not in ["Compañía","Sección CIIU","Clasificación_957",
-                                      "Año","Sector_Corto","Zona_ZScore",
-                                      "Cluster_Label","Movimiento_ZScore"]]
-        if cols_sin_año and len(años_csv) > 1:
-            # El CSV ya está en formato panel (long) — pivotar a wide
-            id_cols  = ["Compañía","Sección CIIU","Clasificación_957"]
-            id_cols  = [c for c in id_cols if c in df.columns]
-            val_cols = [c for c in cols_sin_año if c in df.columns]
-            try:
-                df_wide  = df[id_cols + ["Año"] + val_cols].copy()
-                df_pivot = df_wide.pivot_table(
-                    index=id_cols, columns="Año", values=val_cols, aggfunc="first"
-                )
-                df_pivot.columns = [f"{col} {int(año)}" for col, año in df_pivot.columns]
-                df_pivot = df_pivot.reset_index()
-                # Recuperar Sector_Corto
-                df_pivot["Sector_Corto"] = (
-                    df_pivot["Sección CIIU"].map(SECTOR_CORTO).fillna(df_pivot["Sección CIIU"])
-                    if "Sección CIIU" in df_pivot.columns else "Sin clasificar"
-                )
-                df = df_pivot
-            except Exception:
-                pass  # Si el pivot falla, usar el DataFrame tal como está
-
-    # ── CLASIFICACIÓN Z-SCORE POR AÑO ────────────────────────────────────────
-    for año in [2021, 2022, 2023, 2024]:
-        col_z  = f"Modelo Z-Score de Altman {año}"
-        col_zc = f"ZScore_Altman {año}"  # nombre alternativo del CSV reconstruido
-        col_cl = f"Zona_ZScore_{año}"
-
-        # Usar cualquier columna de Z-Score disponible para ese año
-        col_zscore_real = None
-        for candidato in [col_z, col_zc, f"ZScore_Calculado_{año}"]:
-            if candidato in df.columns:
-                col_zscore_real = candidato
-                break
-
-        if col_zscore_real and col_cl not in df.columns:
-            df[col_cl] = pd.cut(
-                pd.to_numeric(df[col_zscore_real], errors="coerce"),
-                bins=[-np.inf, 1.10, 2.60, np.inf],
-                labels=["🔴 Zona Quiebra", "🟡 Zona Alerta", "🟢 Zona Segura"],
-            ).astype(str)
-
-    # ── MATRIZ DE TRANSICIÓN 2021 → 2024 ─────────────────────────────────────
-    if "Zona_ZScore_2021" in df.columns and "Zona_ZScore_2024" in df.columns:
-        def calcular_movimiento(r):
-            z21 = str(r.get("Zona_ZScore_2021", ""))
-            z24 = str(r.get("Zona_ZScore_2024", ""))
-            if z21 in ("nan", "<NA>", "") or z24 in ("nan", "<NA>", ""):
-                return "Sin dato"
-            if (z21 == "🔴 Zona Quiebra" and z24 in ["🟡 Zona Alerta", "🟢 Zona Segura"]) or \
-               (z21 == "🟡 Zona Alerta"  and z24 == "🟢 Zona Segura"):
-                return "Mejoró"
-            if (z21 == "🟢 Zona Segura"  and z24 in ["🟡 Zona Alerta", "🔴 Zona Quiebra"]) or \
-               (z21 == "🟡 Zona Alerta"  and z24 == "🔴 Zona Quiebra"):
-                return "Empeoró"
-            return "Permaneció"
-
-        df["Movimiento_ZScore"] = df.apply(calcular_movimiento, axis=1)
-
-    return df
-
-@st.cache_resource(show_spinner="⏳ Cargando modelos ML…")
+@st.cache_resource(show_spinner="⏳ Cargando modelos…")
 def load_models():
     m = {}
-    for name in ["random_forest_zscore", "arbol_decision_zscore",
-                 "scaler_financiero", "pca_2d", "kmeans_k3",
-                 "label_encoder_zscore", "features_modelo"]:
-        path = os.path.join(BASE, f"{name}.pkl")
-        if os.path.exists(path):
-            m[name] = joblib.load(path)
+    for nombre in ["preproceso_clustering", "pca_2d", "kmeans_k3", "etiquetas_cluster",
+                   "arbol_decision_zscore", "features_arbol", "features_modelo"]:
+        r = _ruta(f"{nombre}.pkl", "modelos_exportados")
+        if r:
+            try:
+                m[nombre] = joblib.load(r)
+            except Exception as e:                       # versión de scikit-learn incompatible, etc.
+                m.setdefault("_errores", []).append(f"{nombre}: {e}")
     return m
 
-df_raw  = load_data()
-modelos = load_models()
 
-AÑOS = [2021, 2022, 2023, 2024]
+def _mensaje(titulo, cuerpo):
+    st.markdown(f"<div style='background:#FFFFFF;border:1px solid {CLR['rojo']};border-left:6px solid {CLR['rojo']};"
+                f"border-radius:0;padding:1rem 1.3rem;margin:1rem 0;color:#1A1A1A;font-size:.9rem;line-height:1.6;'>"
+                f"<b style='color:{CLR['rojo']};font-size:1rem;'>{titulo}</b><br>{cuerpo}</div>", unsafe_allow_html=True)
+
+
+panel_raw, wide_raw, error_carga = load_data(_ruta("mi_dataset_final.csv"))
+if error_carga:
+    if error_carga == "no_encontrado":
+        _mensaje("No se encontró el archivo de datos 'mi_dataset_final.csv'",
+                 "El dashboard lo buscó en estas carpetas:<br>" + "<br>".join(f"• <code>{c}</code>" for c in dict.fromkeys(CARPETAS_BUSQUEDA))
+                 + "<br><br>Copie en la misma carpeta de <code>dashboard_app.py</code> el archivo <code>mi_dataset_final.csv</code> y la "
+                   "carpeta <code>modelos_exportados</code> que genera el cuaderno V12, y recargue la página. "
+                   "También puede cargar el CSV aquí abajo.")
+    else:
+        _mensaje("El archivo de datos no es compatible", error_carga + "<br><br>Puede cargar el CSV correcto aquí abajo.")
+    subido = st.file_uploader("Cargar mi_dataset_final.csv (exportado por el cuaderno V12)", type="csv")
+    if subido is None:
+        st.stop()
+    panel_raw, wide_raw, error_carga = load_data(subido.getvalue())
+    if error_carga:
+        _mensaje("El archivo cargado no es compatible", error_carga)
+        st.stop()
+modelos = load_models()
+N_EMPRESAS_TOTAL = panel_raw["Compañía"].nunique()
+N_SECTORES_TOTAL = panel_raw["Sección CIIU"].nunique()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. SIDEBAR — FILTROS GLOBALES
 # ─────────────────────────────────────────────────────────────────────────────
+def _etiqueta(txt, top=".7rem"):
+    st.markdown(f"<div style='font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-size:.75rem;font-weight:600;"
+                f"color:{CLR['gris_oscuro']};margin-bottom:.3rem;margin-top:{top};'>{txt}</div>",
+                unsafe_allow_html=True)
+
 with st.sidebar:
-    # Encabezado institucional del sidebar
     st.markdown(f"""
     <div style='background:{CLR["rojo"]};height:4px;margin:-1rem -1rem 1rem;'></div>
     <div style='padding:.2rem 0 .8rem;'>
-      <div style='font-family:Montserrat,Arial,sans-serif;font-weight:700;
-                  font-size:.95rem;color:{CLR["gris_oscuro"]};'>
-        Filtros de análisis
-      </div>
-      <div style='font-size:.72rem;color:#555555;margin-top:.15rem;'>
-        Seleccione los parámetros para explorar los datos
-      </div>
+      <div style='font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-weight:700;font-size:.95rem;color:{CLR["gris_oscuro"]};'>
+        Filtros de análisis</div>
+      <div style='font-size:.72rem;color:#636363;margin-top:.15rem;'>
+        Los filtros se aplican a todas las pestañas. Las series 2021–2024 respetan el sector y la exclusión de alertas.</div>
     </div>
     <hr style='border:none;border-top:1px solid {CLR["gris_claro"]};margin:.2rem 0 .8rem;'>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"<div style='font-family:Montserrat,Arial,sans-serif;font-size:.75rem;"
-                f"font-weight:600;color:{CLR['gris_oscuro']};margin-bottom:.3rem;'>"
-                f"Año de análisis</div>", unsafe_allow_html=True)
-    año_sel = st.selectbox("", AÑOS, index=3, label_visibility="collapsed")
+    _etiqueta("Año de análisis", ".2rem")
+    año_sel = st.selectbox("Año de análisis", AÑOS, index=3, label_visibility="collapsed")
 
-    st.markdown(f"<div style='font-family:Montserrat,Arial,sans-serif;font-size:.75rem;"
-                f"font-weight:600;color:{CLR['gris_oscuro']};margin-bottom:.3rem;margin-top:.7rem;'>"
-                f"Sector económico (CIIU)</div>", unsafe_allow_html=True)
-    sectores_disp = ["Todos"] + sorted(df_raw["Sector_Corto"].unique().tolist())
-    sector_sel    = st.multiselect("", sectores_disp, default=["Todos"],
-                                   label_visibility="collapsed")
-
-    st.markdown(f"<div style='font-family:Montserrat,Arial,sans-serif;font-size:.75rem;"
-                f"font-weight:600;color:{CLR['gris_oscuro']};margin-bottom:.3rem;margin-top:.7rem;'>"
-                f"Tamaño empresarial</div>", unsafe_allow_html=True)
-    tamaños_disp = df_raw["Clasificación_957"].dropna().unique().tolist()
-    tamaño_sel   = st.multiselect("", tamaños_disp, default=tamaños_disp,
-                                  label_visibility="collapsed")
-
-    st.markdown(f"<div style='font-family:Montserrat,Arial,sans-serif;font-size:.75rem;"
-                f"font-weight:600;color:{CLR['gris_oscuro']};margin-bottom:.3rem;margin-top:.7rem;'>"
-                f"Clasificación Z-Score de Altman</div>", unsafe_allow_html=True)
-    zonas_disp = ["🟢 Zona Segura", "🟡 Zona Alerta", "🔴 Zona Quiebra"]
-    zona_sel   = st.multiselect("", zonas_disp, default=zonas_disp,
+    _etiqueta("Sector económico (CIIU)")
+    sectores_disp = sorted(panel_raw["Sector_Corto"].unique().tolist())
+    sector_sel = st.multiselect("Sector", sectores_disp, default=[], placeholder="Todos los sectores",
                                 label_visibility="collapsed")
 
-    st.markdown(f"""
-    <hr style='border:none;border-top:1px solid {CLR["gris_claro"]};margin:1rem 0 .8rem;'>
-    <div style='font-size:.7rem;color:#444444;line-height:1.75;'>
-      <div style='font-family:Montserrat,Arial,sans-serif;font-weight:700;
-                  color:{CLR["rojo"]};margin-bottom:.3rem;font-size:.72rem;'>
-        Universidad del Valle
-      </div>
-      Maestría en Analítica e Inteligencia de Negocios<br>
-      Trabajo de grado — Analítica descriptiva del desempeño financiero<br>
-      del sector real en Colombia (2021–2024)<br><br>
-      <b>Fuente de datos:</b> EMIS Platform<br>
-      <b>Universo:</b> 1.739 empresas | 18 sectores CIIU<br>
-      <b>Período:</b> 2021–2024<br>
-      <b>Modelo de riesgo:</b> Z-Score Altman Z&#8242;&#8242; (1995)
-    </div>
-    """, unsafe_allow_html=True)
+    _etiqueta(f"Tamaño — Decreto 957 (UVT de {año_sel})")
+    tam_disp = [t for t in ORDEN_TAM if t in panel_raw.loc[panel_raw["Año"] == año_sel, "Tamaño (UVT del año)"].unique()]
+    tam_sel = st.multiselect("Tamaño", tam_disp, default=tam_disp, label_visibility="collapsed",
+                             help="El tamaño se calcula en cada año con los ingresos y el UVT de ese año. "
+                                  "Como la muestra son las 3.000 mayores empresas por ingresos de 2024, casi todas son 'Grandes' en 2024.")
 
-# Filtrar dataframe según sidebar
-def filtrar(df, año):
-    d = df.copy()
-    col_z = f"Zona_ZScore_{año}"
-    if "Todos" not in sector_sel:
+    _etiqueta("Zona Z'' de Altman (calculado)")
+    zona_opts = ZONAS[::-1] + [SIN_Z]
+    zona_sel = st.multiselect("Zona", zona_opts, default=zona_opts, label_visibility="collapsed")
+
+    _etiqueta("Calidad de datos")
+    excluir_alertas = st.checkbox("Excluir empresas con alerta de calidad de dato", value=False,
+                                  help="Marca empresas-año con valores implausibles en EMIS (ROA > 100 %, ingresos > 50 veces "
+                                       "los activos, margen neto EMIS inconsistente o razón corriente > 100). Los rankings "
+                                       "de empresas siempre las excluyen.")
+    ocultar_peq = st.checkbox(f"Ocultar sectores con menos de {N_MIN_SECTOR} empresas", value=True,
+                              help="Las medianas de grupos muy pequeños dependen de pocas empresas y no se interpretan.")
+
+def aplicar_filtros(p, año=None, filtros_fila=True):
+    d = p.copy()
+    if sector_sel:
         d = d[d["Sector_Corto"].isin(sector_sel)]
-    if tamaño_sel:
-        d = d[d["Clasificación_957"].isin(tamaño_sel)]
-    if zona_sel and col_z in d.columns:
-        d = d[d[col_z].isin(zona_sel)]
+    if excluir_alertas:
+        d = d[~d["Alerta_Calidad_Dato"]]
+    if filtros_fila:
+        if tam_sel:
+            d = d[d["Tamaño (UVT del año)"].isin(tam_sel)]
+        if zona_sel:
+            d = d[d["Zona"].isin(zona_sel)]
+    if año is not None:
+        d = d[d["Año"] == año]
     return d
 
-df = filtrar(df_raw, año_sel)
+df_año = aplicar_filtros(panel_raw, año_sel)                      # empresas del año seleccionado
+df_serie = aplicar_filtros(panel_raw, filtros_fila=False)         # series 2021–2024 (sector + alertas)
+if df_año.empty:
+    st.warning("Los filtros seleccionados no dejan empresas. Amplíe la selección en la barra lateral.")
+    st.stop()
+
+with st.sidebar:
+    st.markdown(f"""
+    <hr style='border:none;border-top:1px solid {CLR["gris_claro"]};margin:1rem 0 .8rem;'>
+    <div style='font-size:.7rem;color:#636363;line-height:1.75;'>
+      <div style='font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-weight:700;color:{CLR["rojo"]};margin-bottom:.3rem;font-size:.72rem;'>
+        Universidad del Valle</div>
+      Maestría en Analítica e Inteligencia de Negocios<br>
+      Trabajo de grado — caso de estudio de analítica descriptiva (2021–2024)<br><br>
+      <b>Fuente:</b> EMIS Platform (COP millones)<br>
+      <b>Universo:</b> {fmt(N_EMPRESAS_TOTAL, 0)} empresas · {N_SECTORES_TOTAL} secciones CIIU<br>
+      <b>Selección actual ({año_sel}):</b> {fmt(df_año['Compañía'].nunique(), 0)} empresas<br>
+      <b>Riesgo:</b> Z'' de Altman calculado (4 variables, valores en libros)
+    </div>""", unsafe_allow_html=True)
+    st.download_button("⬇️ Descargar datos filtrados (CSV)", df_año.to_csv(index=False).encode("utf-8-sig"),
+                       file_name=f"empresas_filtradas_{año_sel}.csv", mime="text/csv", use_container_width=True)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. CABECERA DEL DASHBOARD
+# 3. CABECERA
+# El manual exige la firma horizontal oficial en la esquina superior izquierda, sin alterarla
+# (tamaño preferido 424 × 51 px). No se dibuja una versión propia: si en la carpeta del dashboard
+# existe el archivo oficial (logo_univalle.png / .svg), se muestra; si no, la cabecera queda solo con texto.
 # ─────────────────────────────────────────────────────────────────────────────
+def _logo_html():
+    for nombre, mime in [("logo_univalle.svg", "image/svg+xml"), ("logo_univalle.png", "image/png")]:
+        r = _ruta(nombre)
+        if r:
+            with open(r, "rb") as f:
+                datos = base64.b64encode(f.read()).decode()
+            return (f"<div class='dash-header-logo'><img src='data:{mime};base64,{datos}' alt='Universidad del Valle' "
+                    f"style='height:51px;max-width:424px;'></div>")
+    return ""
+LOGO_HTML = _logo_html()
+
 st.markdown(f"""
 <div class='dash-header'>
   <div class='dash-header-stripe'></div>
-  <div class='dash-header-body'>
-    <div class='dash-header-logo'>
-      <svg width='42' height='48' viewBox='0 0 42 48' fill='none' xmlns='http://www.w3.org/2000/svg'>
-        <rect width='42' height='42' fill='#C20E1A'/>
-        <rect x='21' y='0' width='21' height='21' fill='#FFFFFF'/>
-        <polygon points='7,18 35,18 21,36' fill='#FFFFFF'/>
-      </svg>
-    </div>
+  <div class='dash-header-body'>{LOGO_HTML}
     <div class='dash-header-texts'>
       <div class='dash-header-pretitle'>Universidad del Valle &nbsp;·&nbsp; MAIN — Maestría en Analítica e Inteligencia de Negocios</div>
-      <h1>Analítica descriptiva del desempeño financiero del <span class='titulo-rojo'>sector real colombiano</span></h1>
-      <p>Prototipo de herramienta de visualización · Principales empresas por ingresos operativos · Período 2021–2024</p>
+      <h1>Desempeño financiero de las principales empresas del <span class='titulo-rojo'>sector real colombiano</span></h1>
+      <p>Prototipo de analítica descriptiva · Liquidez, endeudamiento y rentabilidad · 2021–2024</p>
       <div class='dash-header-meta'>
-        <div class='dash-header-meta-item'>Empresas analizadas: <span>{len(df):,}</span></div>
-        <div class='dash-header-meta-item'>Año seleccionado: <span>{año_sel}</span></div>
+        <div class='dash-header-meta-item'>Empresas en la selección: <span>{fmt(df_año['Compañía'].nunique(), 0)}</span></div>
+        <div class='dash-header-meta-item'>Año: <span>{año_sel}</span></div>
         <div class='dash-header-meta-item'>Fuente: <span>EMIS Platform</span></div>
-        <div class='dash-header-meta-item'>Modelo de riesgo: <span>Z-Score Altman Z&#8242;&#8242;</span></div>
+        <div class='dash-header-meta-item'>Riesgo: <span>Z'' de Altman calculado</span></div>
       </div>
     </div>
   </div>
-</div>
-""", unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPERS: figuras con tema oscuro
+# HELPERS DE VISUALIZACIÓN E INTERPRETACIÓN
 # ─────────────────────────────────────────────────────────────────────────────
 LAYOUT_BASE = dict(
-    paper_bgcolor="#FFFFFF",
-    plot_bgcolor="#FFFFFF",
-    font_color=CLR["gris_oscuro"],
-    font_family="Arial, 'Helvetica Neue', sans-serif",
-    margin=dict(t=36, b=36, l=10, r=10),
-    legend=dict(
-        bgcolor="#FFFFFF",
-        bordercolor=CLR["gris_claro"],
-        borderwidth=1,
-        font_size=11,
-        font_color=CLR["gris_oscuro"],
-    ),
-    xaxis=dict(
-        gridcolor="#F0F0F0",
-        zerolinecolor=CLR["gris_claro"],
-        linecolor=CLR["gris_claro"],
-        tickfont=dict(color=CLR["gris_medio"], size=11),
-    ),
-    yaxis=dict(
-        gridcolor="#F0F0F0",
-        zerolinecolor=CLR["gris_claro"],
-        linecolor=CLR["gris_claro"],
-        tickfont=dict(color=CLR["gris_medio"], size=11),
-    ),
+    paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF", separators=",.",
+    hoverlabel=dict(bgcolor="#FFFFFF", bordercolor=CLR["gris_claro"], font_color=CLR["azul_oscuro"], font_family="Helvetica Neue, Helvetica, Arial, sans-serif"), font_color=CLR["gris_oscuro"],
+    font_family="Helvetica Neue, Helvetica, Arial, sans-serif", margin=dict(t=40, b=40, l=10, r=10),
+    legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0, font_size=11, font_color=CLR["azul_oscuro"],
+                orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    xaxis=dict(gridcolor=CLR["fondo"], zerolinecolor=CLR["gris_claro"], linecolor=CLR["gris_claro"], tickfont=dict(color=CLR["gris_medio"], size=11)),
+    yaxis=dict(gridcolor=CLR["fondo"], zerolinecolor=CLR["gris_claro"], linecolor=CLR["gris_claro"], tickfont=dict(color=CLR["gris_medio"], size=11)),
 )
+# Secuencia para series categóricas: solo colores de la paleta (CLR)
+COLOR_SEQ = [CLR["rojo"], CLR["gris_oscuro"], CLR["azul_claro"], CLR["verde"], CLR["granate"], CLR["amarillo"],
+             CLR["cian"], CLR["morado"]]
+COLOR_ZONA = {"🟢 Zona Segura": CLR["verde"], "🟡 Zona Alerta": CLR["amarillo"], "🔴 Zona Crítica": CLR["rojo"], SIN_Z: CLR["gris_claro"]}
+COLOR_CLUSTER = {"Alta rentabilidad y liquidez": CLR["verde"], "Perfil intermedio de baja deuda financiera": CLR["azul_claro"],
+                 "Mayor deuda financiera y menor rentabilidad": CLR["granate"]}
 
-# Paleta de datos institucional: baja saturación, legible sobre fondo blanco
-COLOR_SEQ = [
-    CLR["rojo"],       # Rojo Univalle — primer dato
-    CLR["gris_oscuro"],# Gris oscuro — segundo dato
-    CLR["azul_claro"], # Azul grisáceo — tercer dato
-    CLR["verde"],      # Verde institucional — cuarto dato
-    CLR["granate"],    # Granate — quinto dato
-    "#5C7A8A",         # Azul pizarra
-    CLR["amarillo"],   # Naranja
-    "#7A6A5A",         # Café institucional
-    "#4A7A6A",         # Verde oscuro
-    "#5A4A7A",         # Violeta apagado
-    "#7A4A4A",         # Granate suave
-    "#4A6A4A",         # Verde bosque
-]
 
 def apply_layout(fig, title="", height=360):
-    fig.update_layout(
-        **LAYOUT_BASE,
-        title=dict(
-            text=title,
-            font_size=12,
-            font_color=CLR["gris_oscuro"],
-            font_family="Montserrat, Arial, sans-serif",
-            x=0,
-        ),
-        height=height,
-    )
+    fig.update_layout(**LAYOUT_BASE, height=height,
+                      title=dict(text=title, font_size=13, font_color=CLR["azul_oscuro"],
+                                 font_family="Helvetica Neue, Helvetica, Arial, sans-serif", x=0))
+    return fig
+
+
+def eje_años(fig):
+    """Muestra solo años enteros en el eje X (evita marcas como 2021.5)."""
+    fig.update_xaxes(tickmode="array", tickvals=AÑOS, ticktext=[str(a) for a in AÑOS], range=[2020.7, 2024.3])
     return fig
 
 
 def kpi_html(titulo, valor, sub="", clase="kpi-info"):
-    # Limpiar emojis del título para estilo institucional
-    titulo_limpio = titulo
-    for em in ["📊","📈","📐","💼","💧","🏢","🟢","🟡","🔴","⚖️","⚡","🧪","💵",
-               "🔗","🏦","🔄","🤖","📋","📦","📑","🏷️","💹","💰","⚠️","🚨"]:
-        titulo_limpio = titulo_limpio.replace(em, "").strip()
-    return f"""
-    <div class='kpi-card {clase}'>
-      <div class='kpi-title'>{titulo_limpio}</div>
-      <div class='kpi-value'>{valor}</div>
-      <div class='kpi-sub'>{sub}</div>
-    </div>"""
+    return (f"<div class='kpi-card {clase}'><div class='kpi-title'>{titulo}</div>"
+            f"<div class='kpi-value'>{valor}</div><div class='kpi-sub'>{sub}</div></div>")
 
 
-def zona_color(zona_str):
-    if "Segura"  in str(zona_str): return CLR["verde"]
-    if "Alerta"  in str(zona_str): return CLR["amarillo"]
-    if "Quiebra" in str(zona_str): return CLR["rojo"]
-    return CLR["gris_medio"]
+def interp(texto, titulo="Lectura del gráfico"):
+    st.markdown(f"<div class='interp-box notranslate' translate='no'><b>{titulo}:</b> {texto}</div>", unsafe_allow_html=True)
 
 
-def zona_bg(zona_str):
-    if "Segura"  in str(zona_str): return "rgba(61,122,61,.10)"
-    if "Alerta"  in str(zona_str): return "rgba(200,88,26,.10)"
-    if "Quiebra" in str(zona_str): return "rgba(194,14,26,.10)"
-    return CLR["fondo"]
+def seccion(txt):
+    st.markdown(f"<p class='section-header'>{txt}</p>", unsafe_allow_html=True)
 
 
-def interp(texto):
-    # Limpiar emojis de métricas del texto de interpretación (conservar símbolos de zona)
-    st.markdown(f"<div class='interp-box'>{texto}</div>", unsafe_allow_html=True)
+def pregunta(n, texto):
+    st.markdown(f"<div style='background:#FFFFFF;border:1px solid {CLR['gris_claro']};border-left:3px solid {CLR['rojo']};border-radius:0;"
+                f"padding:.55rem .9rem;margin:.2rem 0 .9rem;font-size:.85rem;color:{CLR['gris_oscuro']};'>"
+                f"<b style='color:{CLR['rojo']};'>Pregunta orientadora {n}.</b> {texto}</div>", unsafe_allow_html=True)
 
 
-def ficha_as_html(icono, nombre, tag, simple, analogia,
-                  formula, niveles, tecnico="", **kwargs):
-    """
-    Retorna el HTML de una ficha como STRING puro — sin llamar a st.markdown().
-    Usar en el glosario para agrupar fichas en una sola llamada st.markdown()
-    y evitar el error React 'removeChild' que ocurre con múltiples
-    st.markdown() dentro de st.columns() en un loop con re-renders.
-    """
-    c_rojo    = CLR["rojo"]
-    c_gris_os = CLR["gris_oscuro"]
-    c_gris_md = CLR["gris_medio"]
-    c_gris_cl = CLR["gris_claro"]
-    c_fondo   = CLR["fondo"]
-    c_verde   = CLR["verde"]
-    c_amari   = CLR["amarillo"]
-
-    def nivel_badge(c, t):
-        paleta = {
-            "verde":    (c_verde,  "rgba(61,122,61,.09)"),
-            "amarillo": (c_amari,  "rgba(200,88,26,.09)"),
-            "rojo":     (c_rojo,   "rgba(194,14,26,.09)"),
-        }
-        text_c, bg = paleta.get(c, (c_gris_md, c_fondo))
-        s = (f"display:inline-block;padding:.22rem .75rem;border-radius:2px;"
-             f"font-size:.7rem;font-weight:600;white-space:nowrap;"
-             f"font-family:Montserrat,Arial,sans-serif;"
-             f"background:{bg};color:{text_c};border:1px solid {text_c};"
-             f"margin:.1rem .1rem .1rem 0;")
-        return f"<span style='{s}'>{t}</span>"
-
-    niveles_html = "".join(nivel_badge(c, t) for c, t in niveles)
-
-    tecnico_bloque = ""
-    if tecnico:
-        tecnico_bloque = (
-            f"<div style='border-left:2px solid {c_gris_cl};padding:.55rem .85rem;"
-            f"margin-bottom:.6rem;font-size:.78rem;color:{c_gris_os};line-height:1.65;'>"
-            f"<div style='font-size:.63rem;font-weight:700;color:{c_gris_md};"
-            f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:.22rem;"
-            f"font-family:Montserrat,Arial,sans-serif;'>Definición técnica</div>"
-            f"{tecnico}</div>"
-        )
-
-    return (
-        f"<div style='background:#FFFFFF;border-radius:6px;"
-        f"border:1px solid {c_gris_cl};overflow:hidden;margin:.55rem 0;"
-        f"box-shadow:0 1px 3px rgba(0,0,0,.05);'>"
-        f"<div style='background:{c_fondo};border-bottom:2px solid {c_rojo};"
-        f"padding:.55rem .95rem;display:flex;align-items:center;gap:.5rem;'>"
-        f"<span style='color:{c_gris_os};font-weight:700;font-size:.86rem;"
-        f"font-family:Montserrat,Arial,sans-serif;flex:1;'>{nombre}</span>"
-        f"<span style='font-size:.63rem;padding:.18rem .65rem;border-radius:2px;"
-        f"background:{c_rojo};color:#FFF;font-weight:700;"
-        f"letter-spacing:.05em;text-transform:uppercase;"
-        f"font-family:Montserrat,Arial,sans-serif;white-space:nowrap;'>{tag}</span>"
-        f"</div>"
-        f"<div style='padding:.75rem .95rem;'>"
-        f"<div style='background:{c_fondo};border-left:2px solid {c_gris_os};"
-        f"padding:.55rem .85rem;margin-bottom:.6rem;"
-        f"font-size:.79rem;color:{c_gris_os};line-height:1.65;'>"
-        f"<div style='font-size:.63rem;font-weight:700;color:{c_gris_os};"
-        f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:.2rem;"
-        f"font-family:Montserrat,Arial,sans-serif;'>Descripción accesible</div>"
-        f"{simple}"
-        f"<div style='margin-top:.4rem;font-style:italic;color:{c_gris_md};"
-        f"font-size:.78rem;'>{analogia}</div>"
-        f"</div>"
-        + tecnico_bloque
-        + f"<div style='font-size:.63rem;font-weight:700;color:{c_gris_os};"
-        f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:.24rem;"
-        f"font-family:Montserrat,Arial,sans-serif;'>Fórmula</div>"
-        f"<div style='font-family:Courier New,monospace;font-size:.78rem;"
-        f"background:{c_fondo};color:{c_gris_os};"
-        f"border:1px solid {c_gris_cl};padding:.38rem .75rem;"
-        f"border-radius:3px;margin:.1rem 0 .6rem;'>"
-        f"{formula}</div>"
-        f"<div style='font-size:.63rem;font-weight:700;color:{c_gris_os};"
-        f"text-transform:uppercase;letter-spacing:.06em;margin:.35rem 0 .25rem;"
-        f"font-family:Montserrat,Arial,sans-serif;'>Interpretación de resultados</div>"
-        f"<div style='display:flex;flex-wrap:wrap;gap:.15rem;margin-top:.1rem;'>"
-        f"{niveles_html}"
-        f"</div>"
-        f"</div></div>"
-    )
 
 
-def ficha_indicador(icono, nombre, tag, simple, analogia,
-                    formula, niveles, tecnico=""):
-    """
-    Renderiza una ficha metodológica con st.markdown().
-    Solo para uso en expanders (tabs 1–4) donde no hay loop+columns.
-    En el glosario (Tab 6), usar ficha_as_html() + st.markdown() único por categoría.
-    """
-    st.markdown(
-        ficha_as_html(icono, nombre, tag, simple, analogia, formula, niveles, tecnico),
-        unsafe_allow_html=True
-    )
+def resumen_por_grupo(d, grupo, col):
+    """Mediana, cuartiles y n por grupo; aplica el umbral de tamaño mínimo si corresponde."""
+    g = (d.dropna(subset=[col]).groupby(grupo)[col]
+         .agg(Mediana="median", P25=lambda s: s.quantile(.25), P75=lambda s: s.quantile(.75), n="size").reset_index())
+    if ocultar_peq and grupo == "Sector_Corto":
+        g = g[g["n"] >= N_MIN_SECTOR]
+    return g
 
 
-# Diccionario centralizado de todas las fichas
+def nota_n(g):
+    excl = []
+    if ocultar_peq:
+        conteo = df_año.groupby("Sector_Corto").size()
+        excl = conteo[conteo < N_MIN_SECTOR].index.tolist()
+    return (f" Sectores ocultos por tener menos de {N_MIN_SECTOR} empresas: {', '.join(excl)}." if excl else "")
+
+
+def serie_medianas(d, col):
+    g = d.dropna(subset=[col]).groupby("Año")[col].agg(Mediana="median", P25=lambda s: s.quantile(.25),
+                                                        P75=lambda s: s.quantile(.75), n="size").reset_index()
+    return g
+
+
+def zona_pct(d):
+    con_z = d[d["Zona"] != SIN_Z]
+    n = len(con_z)
+    out = {z: ((con_z["Zona"] == z).sum(), (con_z["Zona"] == z).mean() * 100 if n else np.nan) for z in ZONAS}
+    return out, n, (d["Zona"] == SIN_Z).sum()
+
+
+HOVER_MED = "<b>%{x}</b><br>Mediana: %{y:.2f}<br>P25–P75: %{customdata[0]:.2f} – %{customdata[1]:.2f}<br>n = %{customdata[2]}<extra></extra>"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FICHAS METODOLÓGICAS (glosario)
+# ─────────────────────────────────────────────────────────────────────────────
+def ficha_as_html(nombre, tag, simple, analogia, formula, niveles, tecnico="", nota_niveles=""):
+    c_rojo, c_os, c_md, c_cl, c_fondo = CLR["rojo"], CLR["gris_oscuro"], CLR["gris_medio"], CLR["gris_claro"], CLR["fondo"]
+    pal = {"verde": (CLR["verde"], trama(CLR["verde"], 10)), "amarillo": (CLR["amarillo"], trama(CLR["amarillo"], 10)),
+           "rojo": (c_rojo, trama(c_rojo, 10))}
+
+    def badge(c, t):
+        tc, bg = pal.get(c, (c_md, c_fondo))
+        return (f"<span style='display:inline-block;padding:.22rem .75rem;border-radius:0;font-size:.7rem;font-weight:600;"
+                f"background:{bg};color:{tc};border:1px solid {tc};margin:.1rem .1rem .1rem 0;'>{t}</span>")
+    tec = (f"<div style='border-left:2px solid {c_cl};padding:.55rem .85rem;margin-bottom:.6rem;font-size:.78rem;"
+           f"color:{c_os};line-height:1.65;'><div style='font-size:.63rem;font-weight:700;color:{c_md};text-transform:uppercase;"
+           f"margin-bottom:.22rem;'>Definición técnica</div>{tecnico}</div>") if tecnico else ""
+    nota = f"<div style='font-size:.7rem;color:{c_md};margin-top:.35rem;font-style:italic;'>{nota_niveles}</div>" if nota_niveles else ""
+    return (f"<div style='background:#FFFFFF;border-radius:0;border:1px solid {c_cl};overflow:hidden;margin:.55rem 0;'>"
+            f"<div style='background:{c_fondo};border-bottom:2px solid {c_rojo};padding:.55rem .95rem;display:flex;gap:.5rem;'>"
+            f"<span style='color:{c_os};font-weight:700;font-size:.86rem;flex:1;'>{nombre}</span>"
+            f"<span style='font-size:.63rem;padding:.18rem .65rem;background:{c_rojo};color:#FFF;font-weight:700;"
+            f"text-transform:uppercase;white-space:nowrap;'>{tag}</span></div><div style='padding:.75rem .95rem;'>"
+            f"<div style='background:{c_fondo};border-left:2px solid {c_os};padding:.55rem .85rem;margin-bottom:.6rem;"
+            f"font-size:.79rem;color:{c_os};line-height:1.65;'><div style='font-size:.63rem;font-weight:700;text-transform:uppercase;"
+            f"margin-bottom:.2rem;'>Descripción accesible</div>{simple}"
+            f"<div style='margin-top:.4rem;font-style:italic;color:{c_md};font-size:.78rem;'>{analogia}</div></div>{tec}"
+            f"<div style='font-size:.63rem;font-weight:700;color:{c_os};text-transform:uppercase;margin-bottom:.24rem;'>Fórmula</div>"
+            f"<div style='font-family:Courier New,monospace;font-size:.78rem;background:{c_fondo};border:1px solid {c_cl};"
+            f"padding:.38rem .75rem;border-radius:0;margin:.1rem 0 .6rem;'>{formula}</div>"
+            f"<div style='font-size:.63rem;font-weight:700;color:{c_os};text-transform:uppercase;margin:.35rem 0 .25rem;'>"
+            f"Lectura de referencia</div><div>{''.join(badge(c, t) for c, t in niveles)}</div>{nota}</div></div>")
+
+
+def ficha(clave):
+    st.markdown(ficha_as_html(**FICHAS[clave]), unsafe_allow_html=True)
+
+
+NOTA_UMBRAL = ("Rangos orientadores de uso común en análisis financiero, no normativos: "
+               "deben leerse junto con el sector y el modelo de negocio de cada empresa.")
 FICHAS = {
     "razon_corriente": dict(
-        icono="💧", nombre="Razón Corriente (Liquidez)", tag="Liquidez",
-        simple=(
-            "Mide si la empresa tiene suficiente dinero disponible para pagar "
-            "todas sus deudas del próximo año. Es como revisar si hay saldo "
-            "en la cuenta antes de pagar las facturas del mes."
-        ),
-        analogia=(
-            "Si debes $1.000.000 este mes y tienes $1.420.000 en el banco, "
-            "tu razón corriente es 1.42x: puedes pagar todo y te sobran $420.000."
-        ),
-        formula="Activos Corrientes  ÷  Pasivos Corrientes",
-        tecnico=(
-            "Compara los activos que se convertirán en efectivo en menos de 12 meses "
-            "(caja, cuentas por cobrar, inventarios) frente a las obligaciones con vencimiento "
-            "menor a un año. Indicador estándar de solvencia a corto plazo (Van Horne, 2010)."
-        ),
-        niveles=[
-            ("verde",    "✅ ≥ 1.5x — Holgura financiera"),
-            ("amarillo", "⚠️ 1.0 – 1.5x — Zona de atención"),
-            ("rojo",     "🚨 < 1.0x — Riesgo de liquidez"),
-        ],
-    ),
+        nombre="Razón corriente (liquidez)", tag="Liquidez",
+        simple="Indica si la empresa tiene suficientes recursos de corto plazo para pagar las deudas que vencen en el próximo año.",
+        analogia="Si debes $1.000.000 este año y tienes $1.420.000 disponibles, tu razón corriente es 1,42x.",
+        formula="Activos corrientes ÷ Pasivos corrientes",
+        tecnico="Compara los activos que se convertirán en efectivo en menos de 12 meses con las obligaciones de menos de un año.",
+        niveles=[("verde", "≥ 1,5x holgura"), ("amarillo", "1,0 – 1,5x atención"), ("rojo", "< 1,0x presión de liquidez")],
+        nota_niveles=NOTA_UMBRAL),
     "prueba_acida": dict(
-        icono="🧪", nombre="Prueba Ácida", tag="Liquidez",
-        simple=(
-            "Es como la razón corriente pero más estricta: excluye los inventarios "
-            "porque venderlos puede tardar tiempo. Mide si la empresa puede pagar sus "
-            "deudas inmediatas sin necesidad de vender lo que tiene en bodega."
-        ),
-        analogia=(
-            "Si tienes $1.420.000 pero $400.000 están en productos que debes vender "
-            "primero, tu liquidez real inmediata es $1.020.000. Eso es la prueba ácida."
-        ),
-        formula="(Activos Corrientes − Inventarios)  ÷  Pasivos Corrientes",
-        tecnico=(
-            "Eliminación de los inventarios del numerador porque no son activos de alta "
-            "liquidez inmediata. Relevante en sectores con ciclos de inventario largos "
-            "(manufactura, construcción). La brecha entre razón corriente y prueba ácida "
-            "revela la dependencia de las ventas para honrar obligaciones."
-        ),
-        niveles=[
-            ("verde",    "✅ ≥ 1.0x — Solvencia inmediata"),
-            ("amarillo", "⚠️ 0.8 – 1.0x — Vigilar"),
-            ("rojo",     "🚨 < 0.8x — Dependencia de ventas"),
-        ],
-    ),
+        nombre="Prueba ácida", tag="Liquidez",
+        simple="Como la razón corriente, pero sin contar los inventarios, que pueden tardar en venderse.",
+        analogia="De $1.420.000 disponibles, $400.000 son mercancía por vender: tu liquidez inmediata es $1.020.000.",
+        formula="(Activos corrientes − Inventarios) ÷ Pasivos corrientes",
+        tecnico="La brecha entre razón corriente y prueba ácida muestra cuánto depende la empresa de vender inventario para pagar.",
+        niveles=[("verde", "≥ 1,0x"), ("amarillo", "0,8 – 1,0x"), ("rojo", "< 0,8x")], nota_niveles=NOTA_UMBRAL),
     "razon_efectivo": dict(
-        icono="💵", nombre="Razón de Efectivo", tag="Liquidez",
-        simple=(
-            "La prueba más estricta de liquidez: ¿cuánto dinero en caja o en el banco "
-            "tiene la empresa para pagar sus deudas de hoy? No cuenta inventarios ni "
-            "lo que le deben los clientes, solo el dinero disponible ahora mismo."
-        ),
-        analogia=(
-            "Es como el billete en el bolsillo: no cuenta lo que te deben ni lo que "
-            "tienes guardado en mercancía. Solo el efectivo del momento."
-        ),
-        formula="(Efectivo + Equivalentes de Efectivo)  ÷  Pasivos Corrientes",
-        tecnico=(
-            "Subconjunto ultra-conservador de la razón corriente. Útil en análisis de "
-            "crisis de liquidez o stress testing. Valores muy altos pueden indicar "
-            "subutilización de recursos (exceso de caja sin invertir)."
-        ),
-        niveles=[
-            ("verde",    "✅ ≥ 0.5x — Liquidez inmediata sólida"),
-            ("amarillo", "⚠️ 0.2 – 0.5x — Aceptable"),
-            ("rojo",     "🚨 < 0.2x — Baja disponibilidad inmediata"),
-        ],
-    ),
-    "roa": dict(
-        icono="📈", nombre="ROA — Retorno sobre Activos", tag="Rentabilidad",
-        simple=(
-            "Por cada $100 que tiene la empresa (máquinas, edificios, inventarios, "
-            "dinero en caja...), ¿cuánta utilidad genera? Un ROA del 5% significa "
-            "$5 de ganancia por cada $100 invertidos en activos."
-        ),
-        analogia=(
-            "Como poner $100 en una cuenta de ahorros y recibir $5 de intereses al año. "
-            "Cuanto más alto el ROA, más eficiente es la empresa usando lo que tiene."
-        ),
-        formula="Utilidad Neta  ÷  Activos Totales  × 100",
-        tecnico=(
-            "Mide la eficiencia global en el uso de todos los recursos de la empresa "
-            "independientemente de su estructura de financiamiento. ROA bajo puede indicar "
-            "sobredimensionamiento de activos o márgenes deprimidos. Componente clave del "
-            "análisis DuPont (Brigham & Houston, 2014)."
-        ),
-        niveles=[
-            ("verde",    "✅ > 10% — Alta eficiencia"),
-            ("verde",    "✅ 5 – 10% — Eficiencia aceptable"),
-            ("amarillo", "⚠️ 2 – 5% — Baja eficiencia"),
-            ("rojo",     "🚨 < 2% — Muy baja / pérdida"),
-        ],
-    ),
-    "roe": dict(
-        icono="💼", nombre="ROE — Retorno sobre Patrimonio", tag="Rentabilidad",
-        simple=(
-            "Mide cuánto ganan los dueños (socios/accionistas) de la empresa por cada "
-            "peso que pusieron como capital. Es la rentabilidad desde el punto de vista "
-            "del inversionista."
-        ),
-        analogia=(
-            "Si pusiste $100 millones en un negocio y al año tienes $115 millones "
-            "de patrimonio, tu ROE es 15%: recuperaste el 15% de tu inversión en un año."
-        ),
-        formula="Utilidad Neta  ÷  Patrimonio Total  × 100",
-        tecnico=(
-            "Indicador central para los accionistas. Un ROE alto puede originarse en "
-            "alta rentabilidad operativa (deseable) o en alto apalancamiento financiero "
-            "(riesgoso). La descomposición DuPont desagrega el ROE en sus tres motores: "
-            "ROE = Margen Neto × Rotación de Activos × Multiplicador de Patrimonio."
-        ),
-        niveles=[
-            ("verde",    "✅ > 15% — Rentabilidad alta para el accionista"),
-            ("verde",    "✅ 8 – 15% — Rentabilidad aceptable"),
-            ("amarillo", "⚠️ 3 – 8% — Baja rentabilidad"),
-            ("rojo",     "🚨 < 3% — Muy baja / destrucción de valor"),
-        ],
-    ),
-    "margen_neto": dict(
-        icono="📊", nombre="Margen Neto", tag="Rentabilidad",
-        simple=(
-            "De cada $100 que factura la empresa en ventas, ¿cuántos pesos quedan "
-            "como ganancia final después de pagar todo: empleados, materiales, "
-            "impuestos, intereses de deuda?"
-        ),
-        analogia=(
-            "Vendes arepas a $1.000 la unidad. Pagas $966 entre ingredientes, gas, "
-            "arriendo y sueldo. Te quedan $34. Tu margen neto es 3.4%."
-        ),
-        formula="Utilidad Neta  ÷  Ventas Netas  × 100",
-        tecnico=(
-            "Resultado final de toda la cadena de valor: refleja la eficiencia en "
-            "costos de producción, gastos de operación, carga financiera e impuestos. "
-            "Varía significativamente por sector: comercio suele tener márgenes bajos "
-            "(1–4%) mientras servicios especializados pueden superar el 15%."
-        ),
-        niveles=[
-            ("verde",    "✅ > 10% — Margen sólido"),
-            ("verde",    "✅ 4 – 10% — Margen aceptable"),
-            ("amarillo", "⚠️ 1 – 4% — Margen estrecho"),
-            ("rojo",     "🚨 < 1% — Márgenes en riesgo"),
-        ],
-    ),
-    "margen_ebitda": dict(
-        icono="⚡", nombre="Margen EBITDA", tag="Rentabilidad",
-        simple=(
-            "Mide cuánto dinero genera la empresa con sus operaciones principales "
-            "ANTES de pagar deudas, impuestos y gastos contables como depreciación. "
-            "Es una aproximación a la 'caja operativa' que genera el negocio."
-        ),
-        analogia=(
-            "EBITDA es lo que sobra después de pagar solo los costos del negocio "
-            "del día a día, sin contar el pago de créditos bancarios ni los impuestos. "
-            "Una empresa con EBITDA positivo y negativo al final puede estarlo 'pagando' en deudas."
-        ),
-        formula="EBITDA  ÷  Ventas Netas  × 100",
-        tecnico=(
-            "Earnings Before Interest, Taxes, Depreciation & Amortization. "
-            "Ampliamente usado para comparar empresas de distintos países o con "
-            "diferentes estructuras de capital. No es un indicador de flujo de caja "
-            "libre pero es proxy aceptado de generación operativa (Damodaran, 2012)."
-        ),
-        niveles=[
-            ("verde",    "✅ > 15% — Alta generación operativa"),
-            ("verde",    "✅ 8 – 15% — Generación aceptable"),
-            ("amarillo", "⚠️ 3 – 8% — Generación ajustada"),
-            ("rojo",     "🚨 < 3% — Generación insuficiente"),
-        ],
-    ),
-    "zscore": dict(
-        icono="⚖️", nombre="Z-Score de Altman (Z'')", tag="Riesgo financiero",
-        simple=(
-            "Un puntaje de salud financiera creado por el Prof. Edward Altman (1968). "
-            "Combina 4 indicadores y produce un número: mayor = más sana. "
-            "Funciona como el resultado de un examen médico: indica si la empresa "
-            "está bien, en vigilancia, o en peligro."
-        ),
-        analogia=(
-            "Igual que un médico mira presión arterial, azúcar y colesterol para evaluar "
-            "tu salud, el Z-Score mira liquidez, endeudamiento y rentabilidad juntos. "
-            "Una sola señal de alarma puede ignorarse; todas al mismo tiempo es riesgo real."
-        ),
-        formula="Z'' = 6.56·(CT/AT) + 3.26·(UR/AT) + 6.72·(EBIT/AT) + 1.05·(Patrim./Pasivos)",
-        tecnico=(
-            "Versión Z'' de Altman, Hartzell & Peck (1995) para empresas no cotizadas "
-            "en mercados emergentes. X₁=Capital de Trabajo/Activos, X₂=Utilidades Retenidas/Activos, "
-            "X₃=EBIT/Activos, X₄=Patrimonio/Pasivos (valor en libros, no bursátil)."
-        ),
-        niveles=[
-            ("verde",    "✅ Z'' > 2.60 — Zona Segura"),
-            ("amarillo", "⚠️ 1.10 – 2.60 — Zona de Alerta"),
-            ("rojo",     "🚨 Z'' < 1.10 — Zona de Quiebra"),
-        ],
-    ),
+        nombre="Razón de efectivo", tag="Liquidez",
+        simple="Cuánto dinero en caja y bancos tiene la empresa frente a sus deudas de corto plazo.",
+        analogia="Es el dinero disponible hoy, sin contar inventarios ni lo que te deben los clientes.",
+        formula="(Efectivo + Equivalentes) ÷ Pasivos corrientes",
+        tecnico="Medida conservadora de liquidez. Valores muy altos pueden indicar caja ociosa.",
+        niveles=[("verde", "≥ 0,5x"), ("amarillo", "0,2 – 0,5x"), ("rojo", "< 0,2x")], nota_niveles=NOTA_UMBRAL),
+    "pasivos_activos": dict(
+        nombre="Pasivos / Activos (endeudamiento total)", tag="Endeudamiento",
+        simple="Qué parte de todo lo que tiene la empresa está financiada con obligaciones con terceros (bancos, proveedores, empleados, impuestos).",
+        analogia="Si una empresa tiene activos por $100 y debe $59 en total, su endeudamiento total es 59 %.",
+        formula="Pasivos totales ÷ Activos totales × 100",
+        tecnico="Calculado en el cuaderno desde los estados financieros. Es la medida usada para el endeudamiento total.",
+        niveles=[("verde", "< 40 %"), ("amarillo", "40 – 60 %"), ("rojo", "> 60 %")], nota_niveles=NOTA_UMBRAL),
     "deuda_activos": dict(
-        icono="🏦", nombre="Deuda / Activos", tag="Endeudamiento",
-        simple=(
-            "¿Qué porcentaje de todo lo que tiene la empresa fue financiado con deuda? "
-            "Si es 52%, por cada $100 de activos, $52 son prestados. "
-            "A mayor porcentaje, mayor riesgo financiero."
-        ),
-        analogia=(
-            "Compraste un apartamento de $200 millones. Pediste crédito de $120 millones. "
-            "Tu endeudamiento es 60%: el banco es dueño de más de la mitad del apartamento."
-        ),
-        formula="Pasivos Totales  ÷  Activos Totales  × 100",
-        tecnico=(
-            "Ratio de estructura financiera que mide el grado de apalancamiento. "
-            "También llamado 'razón de endeudamiento' o Debt Ratio. "
-            "Un ratio alto implica mayor riesgo de insolvencia pero también mayor "
-            "potencial de apalancamiento del ROE (efecto palanca financiero)."
-        ),
-        niveles=[
-            ("verde",    "✅ < 40% — Endeudamiento bajo"),
-            ("amarillo", "⚠️ 40 – 60% — Endeudamiento moderado"),
-            ("rojo",     "🚨 > 60% — Endeudamiento alto"),
-        ],
-    ),
+        nombre="Deuda financiera / Activos (EMIS)", tag="Endeudamiento",
+        simple="Qué parte de los activos está financiada con préstamos y obligaciones financieras (no incluye proveedores ni otras cuentas por pagar).",
+        analogia="Una empresa puede deber mucho a proveedores y tener cero créditos bancarios: su deuda financiera sería 0 %.",
+        formula="Deuda financiera (corto + largo plazo) ÷ Activos totales × 100",
+        tecnico=("Indicador precalculado por EMIS. En la muestra su mediana es ≈ 7 % frente a ≈ 59 % de pasivos/activos, "
+                 "y cerca de una de cada cuatro empresas no tiene deuda financiera. No se le aplican los umbrales del endeudamiento total."),
+        niveles=[("gris", "Sin umbral: se compara entre sectores y años")]),
     "deuda_capital": dict(
-        icono="🔗", nombre="Relación Deuda / Capital (Patrimonio)", tag="Endeudamiento",
-        simple=(
-            "Compara cuánta deuda tiene la empresa respecto a lo que los dueños "
-            "pusieron de su propio dinero. Un 100% significa que la deuda es igual "
-            "al capital de los socios."
-        ),
-        analogia=(
-            "Si los dueños pusieron $100 millones y la empresa debe $150 millones al banco, "
-            "la relación deuda/capital es 150%: los dueños ponen $1 por cada $1.50 de deuda."
-        ),
-        formula="Pasivos Totales  ÷  Patrimonio Total  × 100",
-        tecnico=(
-            "Debt-to-Equity Ratio (D/E). Mide el apalancamiento financiero desde la "
-            "perspectiva del accionista. Alto D/E amplifica el ROE en tiempos buenos pero "
-            "también amplifica las pérdidas y el riesgo de quiebra. Relacionado con el "
-            "multiplicador de apalancamiento en el modelo DuPont."
-        ),
-        niveles=[
-            ("verde",    "✅ < 80% — Saludable"),
-            ("amarillo", "⚠️ 80 – 150% — Moderado"),
-            ("rojo",     "🚨 > 150% — Alto riesgo"),
-        ],
-    ),
+        nombre="Deuda financiera / Patrimonio (EMIS)", tag="Endeudamiento",
+        simple="Cuántos pesos de deuda financiera tiene la empresa por cada peso aportado por los dueños.",
+        analogia="Si los socios aportaron $100 y la empresa debe $50 a bancos, la relación es 50 %.",
+        formula="Deuda financiera ÷ Patrimonio × 100",
+        tecnico="Indicador precalculado por EMIS. No es interpretable cuando el patrimonio es negativo.",
+        niveles=[("gris", "Sin umbral: se compara entre sectores y años")]),
+    "roa": dict(
+        nombre="ROA — Rentabilidad sobre activos", tag="Rentabilidad",
+        simple="Por cada $100 en activos (máquinas, inventarios, caja…), cuánta utilidad neta genera la empresa.",
+        analogia="Un ROA de 5 % equivale a $5 de ganancia por cada $100 invertidos en activos.",
+        formula="Utilidad neta ÷ Activos totales × 100",
+        tecnico="Mide la eficiencia en el uso de los recursos, independientemente de cómo se financian.",
+        niveles=[("verde", "> 10 %"), ("verde", "5 – 10 %"), ("amarillo", "2 – 5 %"), ("rojo", "< 2 %")], nota_niveles=NOTA_UMBRAL),
+    "roe": dict(
+        nombre="ROE — Rentabilidad sobre patrimonio", tag="Rentabilidad",
+        simple="Cuánto ganan los dueños por cada peso de patrimonio.",
+        analogia="Con un patrimonio de $100 millones y una utilidad de $15 millones, el ROE es 15 %.",
+        formula="Utilidad neta ÷ Patrimonio × 100",
+        tecnico=("Puede ser alto por buena rentabilidad o por alto endeudamiento (ver DuPont). Con patrimonio negativo no es "
+                 "interpretable: una pérdida produciría un ROE positivo."),
+        niveles=[("verde", "> 15 %"), ("verde", "8 – 15 %"), ("amarillo", "3 – 8 %"), ("rojo", "< 3 %")], nota_niveles=NOTA_UMBRAL),
+    "margen_neto": dict(
+        nombre="Margen neto", tag="Rentabilidad",
+        simple="De cada $100 vendidos, cuántos quedan como ganancia final después de todos los costos, gastos, intereses e impuestos.",
+        analogia="Si vendes una arepa a $1.000 y después de pagar todo te quedan $34, tu margen neto es 3,4 %.",
+        formula="Utilidad neta ÷ Ventas × 100",
+        tecnico="Varía mucho por sector: el comercio suele operar con márgenes bajos y alta rotación.",
+        niveles=[("verde", "> 10 %"), ("verde", "4 – 10 %"), ("amarillo", "1 – 4 %"), ("rojo", "< 1 %")], nota_niveles=NOTA_UMBRAL),
+    "margen_ebitda": dict(
+        nombre="Margen EBITDA", tag="Rentabilidad",
+        simple="Cuánto genera el negocio con su operación antes de intereses, impuestos, depreciaciones y amortizaciones.",
+        analogia="Es lo que queda de la operación diaria antes de pagar créditos e impuestos.",
+        formula="EBITDA ÷ Ventas × 100",
+        tecnico="Aproximación a la generación operativa; no equivale al flujo de caja libre.",
+        niveles=[("verde", "> 15 %"), ("verde", "8 – 15 %"), ("amarillo", "3 – 8 %"), ("rojo", "< 3 %")], nota_niveles=NOTA_UMBRAL),
+    "zscore": dict(
+        nombre="Z'' de Altman (calculado)", tag="Riesgo financiero",
+        simple=("Un puntaje que combina liquidez, utilidades acumuladas, rentabilidad operativa y solvencia en un solo número. "
+                "Un valor más alto indica una situación financiera más holgada. Es una señal de riesgo, no una probabilidad de quiebra."),
+        analogia="Como un chequeo médico que combina varios exámenes en un semáforo: verde, amarillo o rojo.",
+        formula="Z'' = 6,56·(CT/AT) + 3,26·(UR/AT) + 6,72·(EBIT/AT) + 1,05·(Patrimonio/Pasivos)",
+        tecnico=("Versión de cuatro variables con valores en libros para empresas no manufactureras y no cotizadas "
+                 "(Altman, Hartzell y Peck, 1995). Calculado en el cuaderno con los estados financieros; no se usa el puntaje de EMIS. "
+                 "Requiere 'Resultados acumulados', por lo que algunas empresas no tienen Z. El modelo EMS de los mismos autores suma "
+                 "3,25 a este puntaje y desplaza los puntos de corte en la misma cantidad, por lo que la clasificación no cambia."),
+        niveles=[("verde", "Z'' > 2,60 Zona Segura"), ("amarillo", "1,10 – 2,60 Zona Alerta"), ("rojo", "Z'' < 1,10 Zona Crítica")],
+        nota_niveles="Puntos de corte de la literatura; no fueron calibrados con insolvencias observadas en Colombia."),
     "dupont": dict(
-        icono="🔄", nombre="Descomposición DuPont del ROE", tag="Análisis avanzado",
-        simple=(
-            "El análisis DuPont descompone el ROE (lo que ganan los dueños) en tres partes: "
-            "¿gana bien por ventas? ¿usa bien sus bienes? ¿depende de deuda para ser rentable? "
-            "Permite entender por qué un sector es rentable o no."
-        ),
-        analogia=(
-            "Como diagnosticar por qué un equipo de fútbol gana partidos: ¿por el delantero "
-            "(margen)? ¿por el centrocampista que crea jugadas (rotación)? "
-            "¿o porque el árbitro es amigo (apalancamiento = deuda)?"
-        ),
-        formula="ROE  =  Margen Neto  ×  Rotación de Activos  ×  Multiplicador de Apalancamiento",
-        tecnico=(
-            "Metodología desarrollada por DuPont de Nemours (1914). "
-            "Margen Neto = UN/Ventas (eficiencia en costos); "
-            "Rotación = Ventas/Activos (eficiencia operativa); "
-            "Multiplicador = Activos/Patrimonio (efecto palanca financiera). "
-            "Permite comparar empresas de distintos sectores aislando cada motor del ROE."
-        ),
-        niveles=[
-            ("verde",   "✅ Impulsado por margen — modelo de negocio robusto"),
-            ("verde",   "✅ Impulsado por rotación — alta eficiencia operativa"),
-            ("amarillo","⚠️ Impulsado por apalancamiento — depende de deuda"),
-            ("rojo",    "🚨 ROE negativo — destruye valor para los socios"),
-        ],
-    ),
+        nombre="Descomposición DuPont del ROE", tag="Rentabilidad",
+        simple="Separa el ROE en tres partes: cuánto gana por cada venta (margen), cuánto vende con sus activos (rotación) y cuánto usa deuda (apalancamiento).",
+        analogia="Dos empresas pueden tener el mismo ROE: una vendiendo poco con mucho margen y otra vendiendo mucho con poco margen.",
+        formula="ROE = Margen neto × Rotación de activos × Multiplicador de apalancamiento",
+        tecnico=("Margen = Utilidad neta / Ventas; Rotación = Ventas / Activos; Multiplicador = Activos / Patrimonio. "
+                 "Se excluyen las empresas con patrimonio ≤ 0. La 'ventaja relativa' compara cada componente del sector con la mediana del universo."),
+        niveles=[("gris", "Lectura comparativa entre sectores, sin umbral")]),
     "kmeans": dict(
-        icono="🤖", nombre="Segmentación K-Means (Machine Learning)", tag="Modelo ML",
-        simple=(
-            "El algoritmo K-Means agrupa automáticamente las 1.739 empresas en 3 grupos "
-            "según su perfil financiero, sin que nadie le diga cómo agruparlas. "
-            "Es como si el computador revisara todos los indicadores y dijera: "
-            "'estas empresas se parecen entre sí'."
-        ),
-        analogia=(
-            "Como separar frutas en una mesa sin etiquetas: el algoritmo identifica "
-            "las manzanas, naranjas y bananos por su forma, color y tamaño. "
-            "Aquí separa empresas por su liquidez, rentabilidad y endeudamiento."
-        ),
-        formula="Minimiza: Σ ||xᵢ - μₖ||²  (distancia al centroide del cluster)",
-        tecnico=(
-            "Algoritmo de clustering no supervisado con K=3 clusters (justificado por "
-            "las tres zonas del Z-Score de Altman). Preprocesamiento: StandardScaler "
-            "para normalización de escala. Visualización mediante PCA (2 componentes), "
-            "que explica el 32.9% de la varianza total del conjunto de 48 features."
-        ),
-        niveles=[
-            ("azul",    "Cluster A — Perfil moderado (mayoría del tejido empresarial)"),
-            ("verde",   "Cluster B — Alto desempeño (márgenes EBITDA >15%)"),
-            ("amarillo","Cluster C — Atípico (valores extremos, validar individualmente)"),
-        ],
-    ),
+        nombre="Perfiles financieros (K-Means)", tag="Segmentación",
+        simple="Un algoritmo agrupa empresas con indicadores parecidos (liquidez, rentabilidad y endeudamiento de 2021 a 2024) sin usar el Z''.",
+        analogia="Como ordenar libros por parecido sin tener etiquetas previas: los grupos resultan de los datos y de las variables elegidas.",
+        formula="Minimiza Σ ||xᵢ − μₖ||² (distancia de cada empresa al centro de su grupo), K = 3",
+        tecnico=("44 indicadores (11 × 4 años), winsorizados en p1–p99, estandarizados e imputados con KNN (k = 5). "
+                 "17 empresas atípicas se tratan como suplementarias: no estiman el modelo, pero se proyectan. "
+                 "Silueta 0,17: estructura débil, por lo que los grupos son una segmentación descriptiva y no categorías naturales."),
+        niveles=[("verde", "Alta rentabilidad y liquidez"), ("gris", "Perfil intermedio de baja deuda financiera"),
+                 ("rojo", "Mayor deuda financiera y menor rentabilidad")]),
 }
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# PESTAÑAS PRINCIPALES
+# PESTAÑAS
 # ─────────────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "Resumen macroeconómico",
-    "Liquidez por sector",
-    "Riesgo Z-Score y endeudamiento",
-    "Rentabilidad y clusters",
-    "Simulador financiero",
-    "Glosario de indicadores",
-])
+tabs = st.tabs(["Inicio", "Resumen general", "Liquidez", "Endeudamiento y riesgo Z''", "Rentabilidad y DuPont",
+                "Perfiles financieros", "Ficha de empresa", "Simulador", "Glosario"])
+t_ini, t_res, t_liq, t_rie, t_ren, t_clu, t_emp, t_sim, t_glo = tabs
+
+zonas_año, n_conz, n_sinz = zona_pct(df_año)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — RESUMEN MACROECONÓMICO
+# INICIO — guía de uso
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab1:
-    # ── KPIs ──────────────────────────────────────────────────────────────────
-    col_z = f"Zona_ZScore_{año_sel}"
-    n_total  = len(df)
-    n_segura = (df[col_z] == "🟢 Zona Segura").sum()  if col_z in df.columns else 0
-    n_alerta = (df[col_z] == "🟡 Zona Alerta").sum()  if col_z in df.columns else 0
-    n_quiebra= (df[col_z] == "🔴 Zona Quiebra").sum() if col_z in df.columns else 0
-    roa_med  = df[f"Rendimiento Sobre Los Activos (ROA) (%) {año_sel}"].median()
-    roe_med  = df[f"Rendimiento Sobre El Patrimonio (ROE) (%) {año_sel}"].median()
-    liq_med  = df[f"Razón De Liquidez (x) {año_sel}"].median()
-    mn_med   = df[f"Margen Neto (%) {año_sel}"].median()
-    z_med    = df[f"Modelo Z-Score de Altman {año_sel}"].median()
+with t_ini:
+    st.markdown(f"""
+    <div style='background:#FFFFFF;border:1px solid {CLR["gris_claro"]};border-left:4px solid {CLR["rojo"]};
+                border-radius:0;padding:1rem 1.4rem;margin-bottom:1rem;'>
+      <div style='font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-weight:700;font-size:1.05rem;color:{CLR["gris_oscuro"]};'>
+        ¿Qué es este tablero?</div>
+      <div style='font-size:.85rem;color:#636363;line-height:1.65;margin-top:.3rem;'>
+        Reúne en un solo lugar los indicadores de <b>liquidez</b>, <b>endeudamiento</b> y <b>rentabilidad</b> de
+        {fmt(N_EMPRESAS_TOTAL, 0)} de las 3.000 empresas colombianas con mayores ingresos operativos de 2024 (fuente: EMIS), para
+        compararlas entre sectores y entre 2021 y 2024. Es un <b>caso de estudio descriptivo</b>: muestra cómo están las
+        empresas, no predice su futuro.<br><br>
+        <b>Pregunta de investigación:</b> ¿cómo el diseño de un prototipo de herramienta de analítica descriptiva, sustentado
+        en la integración y visualización de indicadores financieros, facilita la comprensión y comparación del desempeño de
+        las principales empresas del sector real en Colombia (2021–2024) en liquidez, endeudamiento y rentabilidad?
+      </div>
+    </div>""", unsafe_allow_html=True)
 
-    # Fila 1 KPIs
-    k1, k2, k3, k4 = st.columns(4)
-    k1.markdown(kpi_html("🏢 Empresas analizadas",  f"{n_total:,}",
-                         f"{df['Sección CIIU'].nunique()} sectores CIIU", "kpi-info"),  True)
-    k2.markdown(kpi_html("🟢 Zona Segura",
-                         f"{n_segura:,}", f"{n_segura/n_total:.1%} del total", "kpi-safe"), True)
-    k3.markdown(kpi_html("🟡 Zona Alerta",
-                         f"{n_alerta:,}", f"{n_alerta/n_total:.1%} requieren monitoreo", "kpi-warn"), True)
-    k4.markdown(kpi_html("🔴 Zona Quiebra",
-                         f"{n_quiebra:,}", f"{n_quiebra/n_total:.1%} riesgo crítico", "kpi-danger"), True)
+    seccion("¿Qué quiere saber? — ruta rápida")
+    rutas = [
+        ("1. ¿Cómo se comporta la liquidez por sector?", "Pestaña <b>Liquidez</b>"),
+        ("2. ¿Qué sectores están más endeudados?", "Pestaña <b>Endeudamiento y riesgo Z''</b>"),
+        ("3. ¿Cuáles son las empresas y sectores más rentables?", "Pestaña <b>Rentabilidad y DuPont</b>"),
+        ("4. ¿Cómo evolucionó el desempeño entre 2021 y 2024?", "Pestaña <b>Resumen general</b> y <b>Ficha de empresa</b>"),
+        ("5. ¿Qué empresas muestran señales de alerta financiera?", "Pestaña <b>Endeudamiento y riesgo Z''</b>"),
+        ("¿Cómo está una empresa en particular?", "Pestaña <b>Ficha de empresa</b>"),
+        ("¿Cómo saldría mi empresa?", "Pestaña <b>Simulador</b>"),
+        ("¿Qué significa cada indicador?", "Pestaña <b>Glosario</b>"),
+    ]
+    cols = st.columns(4)
+    for i, (q, a) in enumerate(rutas):
+        cols[i % 4].markdown(f"<div class='kpi-card kpi-info' style='min-height:110px;margin-bottom:.6rem;'>"
+                             f"<div style='font-size:.8rem;font-weight:600;color:{CLR['gris_oscuro']};'>{q}</div>"
+                             f"<div style='font-size:.75rem;color:#636363;margin-top:.4rem;'>{a}</div></div>", unsafe_allow_html=True)
+
+    seccion("Cómo leer el tablero")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        interp("Casi todas las cifras sectoriales son <b>medianas</b>: el valor de la empresa del medio. Se usan porque los datos "
+               "financieros tienen valores extremos (p. ej., una razón corriente de 172 millones) que distorsionan el promedio. "
+               "Al pasar el cursor sobre las barras verá también el rango P25–P75 (el 50 % central de las empresas) y el número de empresas.",
+               "Medianas")
+    with c2:
+        interp("El semáforo de riesgo usa el <b>Z'' de Altman calculado</b> con los estados financieros: 🟢 Segura (Z'' > 2,60), "
+               "🟡 Alerta (1,10–2,60) y 🔴 Crítica (< 1,10). Es una señal, no una probabilidad de quiebra. "
+               f"En {año_sel}, {fmt(n_sinz, 0)} empresas de la selección no tienen Z'' porque EMIS no reporta sus resultados acumulados.",
+               "Semáforo Z''")
+    with c3:
+        interp(f"Los sectores con menos de {N_MIN_SECTOR} empresas se ocultan en las comparaciones sectoriales (puede mostrarlos en "
+               "la barra lateral). Las empresas con <b>alerta de calidad de dato</b> tienen valores implausibles en EMIS: no se "
+               "eliminan, pero se excluyen de los rankings.", "Precauciones")
+
+    seccion(f"Hallazgos principales — {año_sel} (selección actual)")
+    med = {c: df_año[c].median() for c in [LIQ, PAS_ACT, ROA, ROE]}
+    roa_ini = df_serie[df_serie["Año"] == 2021][ROA].median()
+    roa_fin = df_serie[df_serie["Año"] == 2024][ROA].median()
+    h1, h2, h3, h4 = st.columns(4)
+    h1.markdown(kpi_html("Liquidez", fmt(med[LIQ], 2, "x"), "Razón corriente mediana", "kpi-info"), True)
+    h2.markdown(kpi_html("Endeudamiento total", fmt(med[PAS_ACT], 1, " %"), "Pasivos/Activos mediano", "kpi-info"), True)
+    h3.markdown(kpi_html("Rentabilidad", fmt(med[ROA], 1, " %"), f"ROA mediano (2021: {fmt(roa_ini, 1, ' %')} → 2024: {fmt(roa_fin, 1, ' %')})", "kpi-info"), True)
+    h4.markdown(kpi_html("Zona Crítica", fmt(zonas_año['🔴 Zona Crítica'][1], 1, " %"), f"de {fmt(n_conz, 0)} empresas con Z''", "kpi-danger"), True)
+    st.caption("Fuente: EMIS Platform. Cálculos propios (cuaderno V12). Los resultados dependen de las decisiones metodológicas "
+               "documentadas en la pestaña Glosario.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# RESUMEN GENERAL (Pregunta 4)
+# ═══════════════════════════════════════════════════════════════════════════════
+with t_res:
+    pregunta(4, "¿Cómo ha evolucionado el desempeño financiero entre 2021 y 2024?")
+    k = st.columns(4)
+    k[0].markdown(kpi_html("Empresas en la selección", f"{fmt(df_año['Compañía'].nunique(), 0)}",
+                           f"{df_año['Sección CIIU'].nunique()} sectores CIIU · {año_sel}", "kpi-info"), True)
+    for col_k, z, cls in [(k[1], "🟢 Zona Segura", "kpi-safe"), (k[2], "🟡 Zona Alerta", "kpi-warn"), (k[3], "🔴 Zona Crítica", "kpi-danger")]:
+        n_z, p_z = zonas_año[z]
+        col_k.markdown(kpi_html(z, f"{fmt(n_z, 0)}", f"{fmt(p_z, 1, ' %')} de {fmt(n_conz, 0)} empresas con Z''", cls), True)
+    st.caption(f"Los porcentajes de zona se calculan sobre las empresas con Z'' disponible; {fmt(n_sinz, 0)} empresas de la selección no lo tienen.")
 
     st.markdown("<br>", True)
-
-    # Fila 2 KPIs
-    k5, k6, k7, k8 = st.columns(4)
-    k5.markdown(kpi_html("📐 Z-Score mediano",  f"{z_med:.2f}",
-                         "Umbral seguro: >2.60",    "kpi-info"), True)
-    k6.markdown(kpi_html("📈 ROA mediano",      f"{roa_med:.1f}%",
-                         "Retorno sobre activos",   "kpi-info"), True)
-    k7.markdown(kpi_html("💼 ROE mediano",      f"{roe_med:.1f}%",
-                         "Retorno sobre patrimonio","kpi-info"), True)
-    k8.markdown(kpi_html("💧 Liquidez corriente",f"{liq_med:.2f}x",
-                         "Mediana; ≥1.0x = solvente","kpi-info"), True)
-
-    # ── Expanders explicativos de los KPIs ────────────────────────────────────
-    with st.expander("Definiciones de indicadores del resumen ejecutivo"):
-        ec1, ec2 = st.columns(2)
-        with ec1:
-            ficha_indicador(**FICHAS["zscore"])
-            ficha_indicador(**FICHAS["roa"])
-        with ec2:
-            ficha_indicador(**FICHAS["roe"])
-            ficha_indicador(**FICHAS["razon_corriente"])
-
-    st.markdown("<br>", True)
-
-    # ── Gráficas ──────────────────────────────────────────────────────────────
-    col_l, col_r = st.columns([1.2, 0.8])
-
+    col_l, col_r = st.columns([1.25, 0.75])
     with col_l:
-        st.markdown("<p class='section-header'>Evolución temporal de indicadores clave (medianas)</p>", True)
-
-        serie = {}
-        for yr in AÑOS:
-            mask_all = df_raw.index  # sin filtro de año en la evolución
-            serie[yr] = {
-                "ROA":     df_raw[f"Rendimiento Sobre Los Activos (ROA) (%) {yr}"].median(),
-                "ROE":     df_raw[f"Rendimiento Sobre El Patrimonio (ROE) (%) {yr}"].median(),
-                "Margen Neto": df_raw[f"Margen Neto (%) {yr}"].median(),
-                "Liquidez": df_raw[f"Razón De Liquidez (x) {yr}"].median(),
-                "Z-Score":  df_raw[f"Modelo Z-Score de Altman {yr}"].median(),
-            }
-
-        df_evol = pd.DataFrame(serie).T.reset_index().rename(columns={"index": "Año"})
-
-        fig_evol = make_subplots(
-            rows=2, cols=1, shared_xaxes=True,
-            subplot_titles=("Rentabilidad (% — mediana)", "Liquidez y Z-Score (mediana)"),
-            vertical_spacing=0.14,
-        )
-        for met, color in [("ROA", CLR["azul_claro"]),
-                           ("ROE", CLR["verde_claro"]),
-                           ("Margen Neto", CLR["amarillo"])]:
+        seccion("Evolución de indicadores clave 2021–2024 (medianas)")
+        fig_evol = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.14,
+                                 subplot_titles=("Rentabilidad (%)", "Liquidez (x) y Z'' calculado"))
+        series_txt = {}
+        for met, col, color, fila in [("ROA", ROA, CLR["azul_claro"], 1), ("ROE", ROE, CLR["verde"], 1),
+                                       ("Margen neto", MNE, CLR["amarillo"], 1), ("Razón corriente", LIQ, CLR["rojo"], 2),
+                                       ("Z''", ZC, CLR["gris_oscuro"], 2)]:
+            s = serie_medianas(df_serie, col)
+            series_txt[met] = s.set_index("Año")["Mediana"]
             fig_evol.add_trace(go.Scatter(
-                x=df_evol["Año"], y=df_evol[met].round(2),
-                name=met, line=dict(width=2.5, color=color),
-                mode="lines+markers+text",
-                text=[f"{v:.1f}%" for v in df_evol[met]],
-                textposition="top center", textfont_size=9,
-            ), row=1, col=1)
-
-        fig_evol.add_trace(go.Scatter(
-            x=df_evol["Año"], y=df_evol["Liquidez"].round(3),
-            name="Liquidez (x)", line=dict(width=2.5, color=CLR["rojo"], dash="dot"),
-            mode="lines+markers",
-        ), row=2, col=1)
-        fig_evol.add_trace(go.Scatter(
-            x=df_evol["Año"], y=df_evol["Z-Score"].round(2),
-            name="Z-Score", line=dict(width=2.5, color=CLR["verde"]),
-            mode="lines+markers",
-        ), row=2, col=1)
-        # Línea umbral Z segura
-        fig_evol.add_hline(y=2.60, row=2, col=1, line_dash="dash",
-                           line_color=CLR["verde"], opacity=0.4,
-                           annotation_text=" Umbral seguro (2.60)",
-                           annotation_font_color=CLR["verde"], annotation_font_size=10)
-
-        fig_evol.update_layout(
-            **LAYOUT_BASE, height=420,
-            title=dict(text="Desempeño financiero 2021–2024 — universo completo (1.739 empresas)",
-                       font_size=12, font_color="#C20E1A"),
-        )
+                x=s["Año"], y=s["Mediana"], name=met, mode="lines+markers+text", line=dict(width=2.5, color=color),
+                text=[fmt(v, 1) for v in s["Mediana"]], textposition="top center", textfont_size=9,
+                customdata=s[["P25", "P75", "n"]].values,
+                hovertemplate=f"<b>{met}</b> %{{x}}<br>Mediana: %{{y:.2f}}<br>P25–P75: %{{customdata[0]:.2f}} – %{{customdata[1]:.2f}}<br>n = %{{customdata[2]}}<extra></extra>"),
+                row=fila, col=1)
+        fig_evol.add_hline(y=2.60, row=2, col=1, line_dash="dash", line_color=CLR["verde"], opacity=0.4,
+                           annotation_text="Z'' = 2,60", annotation_position="top left", annotation_font_size=9)
+        fig_evol.update_layout(**LAYOUT_BASE, height=480)
+        fig_evol.update_layout(legend=dict(orientation="h", y=-0.12, x=0.5, xanchor="center"))
+        fig_evol.update_traces(cliponaxis=False)
+        eje_años(fig_evol)
         st.plotly_chart(fig_evol, use_container_width=True)
-        interp(
-            "📌 <b>Recuperación (2021–2022):</b> mejora generalizada en rentabilidad post-pandemia. "
-            "<b>Consolidación (2022–2023):</b> estabilización con leve descenso en márgenes. "
-            "<b>Moderación (2023–2024):</b> contracción del ROA y Margen Neto; el Z-Score se mantiene "
-            "en zona segura gracias a la solvencia patrimonial."
-        )
+        r, mn, lq, zz = series_txt["ROA"], series_txt["Margen neto"], series_txt["Razón corriente"], series_txt["Z''"]
+        interp(f"El ROA mediano pasa de {fmt(r.get(2021), 2, ' %')} en 2021 a {fmt(r.get(2024), 2, ' %')} en 2024 "
+               f"({'disminuye' if r.get(2024, np.nan) < r.get(2021, np.nan) else 'aumenta'} {fmt(abs(r.get(2024, np.nan) - r.get(2021, np.nan)), 2)} p.p.), "
+               f"y el margen neto mediano, de {fmt(mn.get(2021), 2, ' %')} a {fmt(mn.get(2024), 2, ' %')}. La razón corriente mediana se mueve entre "
+               f"{fmt(lq.min(), 2, 'x')} y {fmt(lq.max(), 2, 'x')}, y el Z'' mediano entre {fmt(zz.min(), 2)} y {fmt(zz.max(), 2)}, "
+               f"siempre por encima del umbral de Zona Segura. Cada año incluye las empresas del sector seleccionado con dato disponible.")
 
     with col_r:
-        st.markdown("<p class='section-header'>Distribución Z-Score — " + str(año_sel) + "</p>", True)
+        seccion(f"Distribución por zona Z'' — {año_sel}")
+        dz = pd.DataFrame([(z, zonas_año[z][0]) for z in ZONAS[::-1]] + [(SIN_Z, n_sinz)], columns=["Zona", "n"])
+        dz = dz[dz["n"] > 0]
+        fig_donut = go.Figure(go.Pie(labels=dz["Zona"], values=dz["n"], hole=0.6, sort=False, textinfo="percent",
+                                     marker=dict(colors=[COLOR_ZONA[z] for z in dz["Zona"]], line=dict(color="#FFFFFF", width=2)),
+                                     hovertemplate="%{label}<br><b>%{value:,} empresas</b><br>%{percent}<extra></extra>"))
+        fig_donut.add_annotation(text=f"<b>{fmt(dz['n'].sum(), 0)}</b><br>empresas", x=0.5, y=0.5, showarrow=False,
+                                 font_size=13, font_color=CLR["gris_oscuro"])
+        apply_layout(fig_donut, height=360)
+        fig_donut.update_layout(legend=dict(orientation="h", y=-0.02, yanchor="top", x=0.5, xanchor="center"), margin=dict(t=20, b=90, l=10, r=10))
+        st.plotly_chart(fig_donut, use_container_width=True)
+        interp("El gris corresponde a empresas sin Z'' calculado. Los porcentajes del gráfico incluyen ese grupo; "
+               "los de las tarjetas superiores se calculan solo sobre empresas con Z''.")
 
-        # Donut zonas
-        if col_z in df.columns:
-            dist_z = df[col_z].value_counts().reset_index()
-            dist_z.columns = ["Zona", "n"]
-            dist_z["pct"] = dist_z["n"] / dist_z["n"].sum()
+    seccion(f"Empresas por sector — {año_sel}")
+    dist_sec = df_año.groupby("Sector_Corto").size().reset_index(name="n").sort_values("n")
+    fig_sec = go.Figure(go.Bar(x=dist_sec["n"], y=dist_sec["Sector_Corto"], orientation="h", text=dist_sec["n"],
+                               textposition="outside", textfont_size=10,
+                               marker_color=[CLR["gris_claro"] if v < N_MIN_SECTOR else CLR["azul_claro"] for v in dist_sec["n"]]))
+    apply_layout(fig_sec, height=max(300, 24 * len(dist_sec)))
+    st.plotly_chart(fig_sec, use_container_width=True)
+    top2 = dist_sec.sort_values("n", ascending=False).head(2)
+    interp(f"Comercio y manufactura dominan la muestra: {top2.iloc[0]['Sector_Corto']} ({fmt(top2.iloc[0]['n'], 0)}) y "
+           f"{top2.iloc[1]['Sector_Corto']} ({fmt(top2.iloc[1]['n'], 0)}) suman el "
+           f"{fmt(top2['n'].sum() / dist_sec['n'].sum() * 100, 1, ' %')} de las empresas. Las barras grises tienen menos de "
+           f"{N_MIN_SECTOR} empresas." if len(top2) == 2 else "Distribución de empresas por sector.")
 
-            colors_z = {
-                "🟢 Zona Segura":  CLR["verde"],
-                "🟡 Zona Alerta":  CLR["amarillo"],
-                "🔴 Zona Quiebra": CLR["rojo"],
-            }
-            fig_donut = go.Figure(go.Pie(
-                labels=dist_z["Zona"],
-                values=dist_z["n"],
-                hole=0.6,
-                textinfo="percent+label",
-                textfont_size=11,
-                marker=dict(
-                    colors=[colors_z.get(z, CLR["gris_medio"]) for z in dist_z["Zona"]],
-                    line=dict(color="#FFFFFF", width=2),
-                ),
-                hovertemplate="%{label}<br><b>%{value:,} empresas</b><br>%{percent}<extra></extra>",
-            ))
-            fig_donut.add_annotation(
-                text=f"<b>{n_total:,}</b><br><span style='font-size:10px'>Empresas</span>",
-                x=0.5, y=0.5, showarrow=False, font_size=14, font_color="#FFFFFF",
-            )
-            apply_layout(fig_donut, height=260)
-            st.plotly_chart(fig_donut, use_container_width=True)
-
-        # Distribución sectorial
-        st.markdown("<p class='section-header'>Empresas por sector</p>", True)
-        dist_sec = df.groupby("Sector_Corto").size().reset_index(name="n")
-        dist_sec = dist_sec.sort_values("n", ascending=True).tail(12)
-
-        fig_sec = go.Figure(go.Bar(
-            x=dist_sec["n"], y=dist_sec["Sector_Corto"],
-            orientation="h",
-            marker_color=CLR["azul_claro"],
-            text=dist_sec["n"],
-            textposition="outside",
-            textfont_size=10,
-        ))
-        apply_layout(fig_sec, height=320)
-        st.plotly_chart(fig_sec, use_container_width=True)
-
-    # ── Fases temporales ──────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("<p class='section-header'>Fases del ciclo financiero 2021–2024</p>", True)
-    f1, f2, f3 = st.columns(3)
-    with f1:
-        interp("🟢 <b>Fase 1 — Recuperación post-pandemia (2021–2022)</b><br>"
-               "Mejora generalizada en márgenes operativos y EBITDA. "
-               "El ROE aumentó impulsado principalmente por el multiplicador de "
-               "apalancamiento en sectores con alta intensidad de activos.")
-    with f2:
-        interp("🟡 <b>Fase 2 — Consolidación (2022–2023)</b><br>"
-               "Estabilización de indicadores con leve deterioro en liquidez "
-               "en sectores de alta exposición a tasas de interés (Construcción, "
-               "Inmobiliario). La rotación de activos se mantiene estable.")
-    with f3:
-        interp("🟠 <b>Fase 3 — Moderación (2023–2024)</b><br>"
-               "Contracción de márgenes hacia medianas históricas. El análisis "
-               "DuPont confirma que las variaciones del ROE responden principalmente "
-               "a cambios en márgenes, no en eficiencia operativa.")
+    seccion("Cambio 2021 → 2024 por indicador (medianas)")
+    filas = []
+    for etq, col in [("Razón corriente (x)", LIQ), ("Prueba ácida (x)", ACI), ("Pasivos/Activos (%)", PAS_ACT),
+                     ("Deuda financiera/Activos (%)", DFA), ("ROA (%)", ROA), ("ROE (%)", ROE), ("Margen neto (%)", MNE),
+                     ("Margen EBITDA (%)", MEB), ("Z'' calculado", ZC)]:
+        v = {a: df_serie[df_serie["Año"] == a][col].median() for a in AÑOS}
+        filas.append({"Indicador": etq, **{str(a): round(v[a], 2) for a in AÑOS}, "Cambio 2021→2024": round(v[2024] - v[2021], 2)})
+    st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — LIQUIDEZ
+# LIQUIDEZ (Pregunta 1)
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab2:
-    liq_col  = f"Razón De Liquidez (x) {año_sel}"
-    acida_col= f"Prueba Ácida (x) {año_sel}"
-    efec_col = f"Razón De Efectivo (x) {año_sel}"
+with t_liq:
+    pregunta(1, "¿Cómo se comporta la liquidez por sector económico?")
+    liq_m, aci_m, efe_m = df_año[LIQ].median(), df_año[ACI].median(), df_año[EFE].median()
+    clase = lambda v, a, b: "kpi-safe" if v >= a else ("kpi-warn" if v >= b else "kpi-danger")
+    ka, kb, kc, kd = st.columns(4)
+    ka.markdown(kpi_html("Razón corriente (mediana)", fmt(liq_m, 2, "x"), "Referencia: ≥ 1,5x holgura · < 1,0x presión", clase(liq_m, 1.5, 1.0)), True)
+    kb.markdown(kpi_html("Prueba ácida (mediana)", fmt(aci_m, 2, "x"), "Sin inventarios", clase(aci_m, 1.0, 0.8)), True)
+    kc.markdown(kpi_html("Razón de efectivo (mediana)", fmt(efe_m, 2, "x"), "Solo caja y equivalentes", clase(efe_m, 0.5, 0.2)), True)
+    kd.markdown(kpi_html("Empresas con razón corriente < 1", fmt((df_año[LIQ] < 1).mean() * 100, 1, " %"),
+                         f"de {fmt(df_año[LIQ].notna().sum(), 0)} con dato", "kpi-info"), True)
+    with st.expander("¿Qué miden estos indicadores?"):
+        e1, e2, e3 = st.columns(3)
+        with e1: ficha("razon_corriente")
+        with e2: ficha("prueba_acida")
+        with e3: ficha("razon_efectivo")
 
-    # KPIs
-    ka, kb, kc = st.columns(3)
-    liq_all = df[liq_col].median()
-    aci_all = df[acida_col].median()
-    efe_all = df[efec_col].median()
-
-    def kpi_liq_clase(v, u1=1.5, u2=1.0):
-        if v >= u1: return "kpi-safe"
-        if v >= u2: return "kpi-warn"
-        return "kpi-danger"
-
-    ka.markdown(kpi_html("💧 Razón Corriente (mediana)",
-                         f"{liq_all:.2f}x",
-                         "✅ ≥1.5x holgura | ⚠️ 1.0–1.5x | 🚨 <1.0x",
-                         kpi_liq_clase(liq_all)), True)
-    kb.markdown(kpi_html("🧪 Prueba Ácida (mediana)",
-                         f"{aci_all:.2f}x",
-                         "Sin inventarios; mide liquidez inmediata",
-                         kpi_liq_clase(aci_all, 1.0, 0.8)), True)
-    kc.markdown(kpi_html("💵 Razón de Efectivo (mediana)",
-                         f"{efe_all:.2f}x",
-                         "Solo caja y equivalentes",
-                         kpi_liq_clase(efe_all, 0.5, 0.2)), True)
-
-    # ── Expanders liquidez ────────────────────────────────────────────────────
-    with st.expander("Definición y lectura de los indicadores de liquidez"):
-        el1, el2, el3 = st.columns(3)
-        with el1:
-            ficha_indicador(**FICHAS["razon_corriente"])
-        with el2:
-            ficha_indicador(**FICHAS["prueba_acida"])
-        with el3:
-            ficha_indicador(**FICHAS["razon_efectivo"])
-
-    st.markdown("<br>", True)
-
-    # ── Barras por sector ─────────────────────────────────────────────────────
     col_l2, col_r2 = st.columns([1.2, 0.8])
-
     with col_l2:
-        st.markdown("<p class='section-header'>Razón corriente y prueba ácida por sector</p>", True)
-
-        liq_sec = (df.groupby("Sector_Corto")[[liq_col, acida_col]]
-                   .median().reset_index()
-                   .rename(columns={liq_col: "Razón Corriente", acida_col: "Prueba Ácida"})
-                   .sort_values("Razón Corriente", ascending=False))
-
+        seccion(f"Razón corriente y prueba ácida por sector — {año_sel} (medianas)")
+        g1, g2 = resumen_por_grupo(df_año, "Sector_Corto", LIQ), resumen_por_grupo(df_año, "Sector_Corto", ACI)
+        g1 = g1.sort_values("Mediana", ascending=False)
+        g2 = g2.set_index("Sector_Corto").reindex(g1["Sector_Corto"]).reset_index()
         fig_liq = go.Figure()
-        fig_liq.add_trace(go.Bar(
-            name="Razón Corriente",
-            x=liq_sec["Sector_Corto"], y=liq_sec["Razón Corriente"],
-            marker_color=CLR["azul_claro"],
-            text=liq_sec["Razón Corriente"].round(2),
-            textposition="outside", textfont_size=9,
-        ))
-        fig_liq.add_trace(go.Bar(
-            name="Prueba Ácida",
-            x=liq_sec["Sector_Corto"], y=liq_sec["Prueba Ácida"],
-            marker_color=CLR["verde_claro"],
-            text=liq_sec["Prueba Ácida"].round(2),
-            textposition="outside", textfont_size=9,
-        ))
-        fig_liq.add_hline(y=1.0, line_dash="dash", line_color=CLR["rojo"],
-                          opacity=0.6, annotation_text=" Mínimo solvencia (1.0x)",
-                          annotation_font_color=CLR["rojo"], annotation_font_size=9)
-        fig_liq.add_hline(y=1.5, line_dash="dash", line_color=CLR["verde"],
-                          opacity=0.4, annotation_text=" Holgura (1.5x)",
-                          annotation_font_color=CLR["verde"], annotation_font_size=9)
-        fig_liq.update_layout(**LAYOUT_BASE, barmode="group", height=380,
-                              xaxis_tickangle=-35)
+        for g, nombre, color in [(g1, "Razón corriente", CLR["azul_claro"]), (g2, "Prueba ácida", CLR["verde_claro"])]:
+            fig_liq.add_trace(go.Bar(name=nombre, x=g["Sector_Corto"], y=g["Mediana"], marker_color=color,
+                                     text=[fmt(v, 2) for v in g["Mediana"]], textposition="outside", textfont_size=9,
+                                     customdata=g[["P25", "P75", "n"]].values, hovertemplate=HOVER_MED))
+        fig_liq.add_hline(y=1.0, line_dash="dash", line_color=CLR["rojo"], opacity=0.6, annotation_text="1,0x", annotation_position="top left", annotation_font_size=9)
+        fig_liq.add_hline(y=1.5, line_dash="dash", line_color=CLR["verde"], opacity=0.4, annotation_text="1,5x", annotation_position="top left", annotation_font_size=9)
+        fig_liq.update_layout(**LAYOUT_BASE, barmode="group", height=400, xaxis_tickangle=-35)
         st.plotly_chart(fig_liq, use_container_width=True)
-
-        interp("📌 <b>¿Qué es la razón corriente?</b> Mide cuánto dinero tiene disponible "
-               "la empresa por cada peso que debe pagar este año. Una razón de 1.5x significa "
-               "que por cada $100 de deuda tiene $150 disponibles. La <b>prueba ácida</b> "
-               "excluye inventarios, revelando la liquidez sin depender de las ventas.")
+        if len(g1):
+            bajo1 = g1[g1["Mediana"] < 1]["Sector_Corto"].tolist()
+            interp(f"En {año_sel}, la mayor liquidez mediana está en {g1.iloc[0]['Sector_Corto']} ({fmt(g1.iloc[0]['Mediana'], 2, 'x')}) y la menor en "
+                   f"{g1.iloc[-1]['Sector_Corto']} ({fmt(g1.iloc[-1]['Mediana'], 2, 'x')}). "
+                   + (f"Sectores con mediana por debajo de 1,0x: {', '.join(bajo1)}. " if bajo1 else "Ningún sector tiene una mediana inferior a 1,0x. ")
+                   + "La distancia entre las dos barras de un sector indica cuánto de su liquidez depende de los inventarios." + nota_n(g1))
 
     with col_r2:
-        st.markdown("<p class='section-header'>Dispersión: corriente vs. prueba ácida</p>", True)
-
-        fig_scat = px.scatter(
-            df.dropna(subset=[liq_col, acida_col]),
-            x=liq_col, y=acida_col,
-            color="Sector_Corto",
-            size_max=8,
-            opacity=0.65,
-            labels={liq_col: "Razón Corriente (x)",
-                    acida_col: "Prueba Ácida (x)",
-                    "Sector_Corto": "Sector"},
-            color_discrete_sequence=COLOR_SEQ,
-        )
+        seccion("Razón corriente vs. prueba ácida por empresa")
+        sc = df_año.dropna(subset=[LIQ, ACI])
+        lim_x, lim_y = sc[LIQ].quantile(.98), sc[ACI].quantile(.98)
+        fig_scat = px.scatter(sc, x=LIQ, y=ACI, color="Zona", color_discrete_map=COLOR_ZONA, opacity=0.6,
+                              hover_data={"Compañía": True, "Sector_Corto": True},
+                              labels={LIQ: "Razón corriente (x)", ACI: "Prueba ácida (x)", "Zona": "Zona Z''"})
         fig_scat.update_traces(marker_size=5)
         fig_scat.add_vline(x=1.0, line_dash="dot", line_color=CLR["rojo"], opacity=0.5)
         fig_scat.add_hline(y=1.0, line_dash="dot", line_color=CLR["rojo"], opacity=0.5)
-        apply_layout(fig_scat, height=340)
+        apply_layout(fig_scat, height=400)
+        fig_scat.update_xaxes(range=[0, lim_x]); fig_scat.update_yaxes(range=[0, lim_y])
         st.plotly_chart(fig_scat, use_container_width=True)
+        cuad = ((sc[LIQ] < 1) & (sc[ACI] < 1))
+        crit_cuad = (sc.loc[cuad, "Zona"] == "🔴 Zona Crítica").mean() * 100 if cuad.any() else np.nan
+        crit_resto = (sc.loc[~cuad & (sc["Zona"] != SIN_Z), "Zona"] == "🔴 Zona Crítica").mean() * 100
+        interp(f"{fmt(cuad.sum(), 0)} empresas ({fmt(cuad.mean() * 100, 1, ' %')}) tienen ambos indicadores por debajo de 1,0x (cuadrante inferior izquierdo). "
+               f"De ellas, el {fmt(crit_cuad, 1, ' %')} está en Zona Crítica, frente al {fmt(crit_resto, 1, ' %')} del resto con Z''. "
+               "Ejes acotados al percentil 98 para facilitar la lectura.")
 
-        interp("Empresas en el cuadrante inferior-izquierdo (ambos ratios &lt;1.0x) "
-               "presentan las mayores presiones de liquidez y suelen coincidir con "
-               "zonas de alerta o quiebra en el Z-Score de Altman.")
-
-    # ── Evolución temporal de liquidez ────────────────────────────────────────
-    st.markdown("<p class='section-header'>Evolución de liquidez sectorial 2021–2024</p>", True)
-
-    top_sectores = (df_raw.groupby("Sector_Corto")
-                    .size().nlargest(8).index.tolist())
-
-    liq_evol = []
-    for yr in AÑOS:
-        col = f"Razón De Liquidez (x) {yr}"
-        if col in df_raw.columns:
-            tmp = (df_raw[df_raw["Sector_Corto"].isin(top_sectores)]
-                   .groupby("Sector_Corto")[col].median().reset_index())
-            tmp.columns = ["Sector", "Liquidez"]
-            tmp["Año"] = yr
-            liq_evol.append(tmp)
-
-    df_liq_evol = pd.concat(liq_evol)
-    fig_lev = px.line(
-        df_liq_evol, x="Año", y="Liquidez", color="Sector",
-        markers=True, color_discrete_sequence=COLOR_SEQ,
-        labels={"Liquidez": "Razón Corriente (mediana)"},
-    )
-    fig_lev.add_hline(y=1.0, line_dash="dash", line_color=CLR["rojo"],
-                      opacity=0.5, annotation_text=" Umbral mínimo")
-    apply_layout(fig_lev, height=340)
+    seccion("Evolución de la razón corriente por sector 2021–2024 (medianas, 8 sectores con más empresas)")
+    top_sec = df_serie.groupby("Sector_Corto")["Compañía"].nunique().nlargest(8).index
+    lev = (df_serie[df_serie["Sector_Corto"].isin(top_sec)].groupby(["Año", "Sector_Corto"])[LIQ].median().reset_index())
+    fig_lev = px.line(lev, x="Año", y=LIQ, color="Sector_Corto", markers=True, color_discrete_sequence=COLOR_SEQ,
+                      labels={LIQ: "Razón corriente (mediana)", "Sector_Corto": "Sector"})
+    fig_lev.add_hline(y=1.0, line_dash="dash", line_color=CLR["rojo"], opacity=0.5, annotation_text=" 1,0x")
+    apply_layout(fig_lev, height=360); eje_años(fig_lev)
     st.plotly_chart(fig_lev, use_container_width=True)
+    camb = lev.pivot(index="Sector_Corto", columns="Año", values=LIQ)
+    if 2021 in camb and 2024 in camb:
+        d_c = (camb[2024] - camb[2021]).sort_values()
+        interp(f"Entre 2021 y 2024, la mayor caída de la razón corriente mediana se observa en {d_c.index[0]} ({fmt(d_c.iloc[0], 2, 'x')}) "
+               f"y el mayor aumento en {d_c.index[-1]} ({'+' if d_c.iloc[-1] > 0 else ''}{fmt(d_c.iloc[-1], 2, 'x')}).")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — RIESGO Z-SCORE & ENDEUDAMIENTO
+# ENDEUDAMIENTO Y RIESGO Z'' (Preguntas 2 y 5)
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab3:
-    z_col   = f"Modelo Z-Score de Altman {año_sel}"
-    deuda_col = f"Deuda / Activos (%) {año_sel}"
-    deudat_col= f"Relación Deuda/Capital (%) {año_sel}"
-    col_zona  = f"Zona_ZScore_{año_sel}"
+with t_rie:
+    pregunta(2, "¿Qué sectores presentan mayor nivel de endeudamiento relativo?")
+    pa_m, dfa_m = df_año[PAS_ACT].median(), df_año[DFA].median()
+    sin_deuda = (df_año[DFA] == 0).mean() * 100
+    z_m = df_año[ZC].median()
+    kz = st.columns(4)
+    kz[0].markdown(kpi_html("Pasivos / Activos (mediana)", fmt(pa_m, 1, " %"), "Endeudamiento total",
+                            "kpi-safe" if pa_m < 40 else ("kpi-warn" if pa_m <= 60 else "kpi-danger")), True)
+    kz[1].markdown(kpi_html("Deuda financiera / Activos", fmt(dfa_m, 1, " %"), "Mediana (EMIS)", "kpi-info"), True)
+    kz[2].markdown(kpi_html("Sin deuda financiera", fmt(sin_deuda, 1, " %"), "Empresas con deuda financiera = 0", "kpi-info"), True)
+    kz[3].markdown(kpi_html("Z'' calculado (mediana)", fmt(z_m, 2), "Zona Segura: > 2,60",
+                            "kpi-safe" if z_m > 2.6 else ("kpi-warn" if z_m >= 1.1 else "kpi-danger")), True)
+    with st.expander("¿Qué miden estos indicadores?"):
+        e1, e2, e3 = st.columns(3)
+        with e1: ficha("pasivos_activos")
+        with e2: ficha("deuda_activos")
+        with e3: ficha("deuda_capital")
 
-    # KPIs
-    z_med_filt  = df[z_col].median()
-    deuda_med   = df[deuda_col].median()
-    deudat_med  = df[deudat_col].median()
-    n_seg  = (df[col_zona] == "🟢 Zona Segura").sum()  if col_zona in df.columns else 0
-    n_ale  = (df[col_zona] == "🟡 Zona Alerta").sum()  if col_zona in df.columns else 0
-    n_qui  = (df[col_zona] == "🔴 Zona Quiebra").sum() if col_zona in df.columns else 0
+    seccion(f"Endeudamiento por sector — {año_sel} (medianas)")
+    gpa = resumen_por_grupo(df_año, "Sector_Corto", PAS_ACT).sort_values("Mediana", ascending=False)
+    gdf = resumen_por_grupo(df_año, "Sector_Corto", DFA).set_index("Sector_Corto").reindex(gpa["Sector_Corto"]).reset_index()
+    fig_end = go.Figure()
+    fig_end.add_trace(go.Bar(name="Pasivos / Activos (%)", x=gpa["Sector_Corto"], y=gpa["Mediana"], marker_color=CLR["gris_oscuro"],
+                             text=[fmt(v, 1) for v in gpa["Mediana"]], textposition="outside", textfont_size=9,
+                             customdata=gpa[["P25", "P75", "n"]].values, hovertemplate=HOVER_MED))
+    fig_end.add_trace(go.Bar(name="Deuda financiera / Activos (%)", x=gdf["Sector_Corto"], y=gdf["Mediana"], marker_color=CLR["amarillo"],
+                             text=[fmt(v, 1) for v in gdf["Mediana"]], textposition="outside", textfont_size=9,
+                             customdata=gdf[["P25", "P75", "n"]].values, hovertemplate=HOVER_MED))
+    fig_end.add_hline(y=60, line_dash="dash", line_color=CLR["rojo"], opacity=0.5, annotation_text="60 % (endeudamiento total alto)", annotation_position="top left", annotation_font_size=9)
+    fig_end.update_layout(**LAYOUT_BASE, barmode="group", height=400, xaxis_tickangle=-35, yaxis_title="%")
+    st.plotly_chart(fig_end, use_container_width=True)
+    if len(gpa):
+        sobre60 = gpa[gpa["Mediana"] > 60]["Sector_Corto"].tolist()
+        gdf_ok = gdf.dropna(subset=["Mediana"]).sort_values("Mediana", ascending=False)
+        interp(f"En {año_sel}, el mayor endeudamiento total mediano está en {gpa.iloc[0]['Sector_Corto']} ({fmt(gpa.iloc[0]['Mediana'], 1, ' %')}) y el menor en "
+               f"{gpa.iloc[-1]['Sector_Corto']} ({fmt(gpa.iloc[-1]['Mediana'], 1, ' %')}). "
+               + (f"Sectores con pasivos superiores al 60 % de los activos: {', '.join(sobre60)}. " if sobre60 else "")
+               + (f"La mayor deuda financiera relativa está en {gdf_ok.iloc[0]['Sector_Corto']} ({fmt(gdf_ok.iloc[0]['Mediana'], 1, ' %')}). " if len(gdf_ok) else "")
+               + "La deuda financiera es solo una parte de los pasivos: un sector puede tener pasivos altos con proveedores y poca deuda bancaria." + nota_n(gpa))
 
-    kz1, kz2, kz3, kz4 = st.columns(4)
-    kz1.markdown(kpi_html("⚖️ Z-Score mediano",   f"{z_med_filt:.2f}",
-                          "Zona segura: >2.60",
-                          "kpi-safe" if z_med_filt > 2.60
-                          else ("kpi-warn" if z_med_filt >= 1.10 else "kpi-danger")), True)
-    kz2.markdown(kpi_html("🟢 Zona Segura",  f"{n_seg:,}", f"{n_seg/(len(df) or 1):.1%}", "kpi-safe"), True)
-    kz3.markdown(kpi_html("🟡 Zona Alerta",  f"{n_ale:,}", f"{n_ale/(len(df) or 1):.1%}", "kpi-warn"), True)
-    kz4.markdown(kpi_html("🔴 Zona Quiebra", f"{n_qui:,}", f"{n_qui/(len(df) or 1):.1%}", "kpi-danger"), True)
-
-    # ── Expanders riesgo ──────────────────────────────────────────────────────
-    with st.expander("Metodología del Z-Score de Altman e indicadores de endeudamiento"):
-        ez1, ez2, ez3 = st.columns(3)
-        with ez1:
-            ficha_indicador(**FICHAS["zscore"])
-        with ez2:
-            ficha_indicador(**FICHAS["deuda_activos"])
-        with ez3:
-            ficha_indicador(**FICHAS["deuda_capital"])
-
-    st.markdown("<br>", True)
+    st.markdown("---")
+    pregunta(5, "¿Existen empresas con señales de alerta financiera (Z'' de Altman)?")
+    kz2 = st.columns(4)
+    for col_k, z, cls in [(kz2[0], "🟢 Zona Segura", "kpi-safe"), (kz2[1], "🟡 Zona Alerta", "kpi-warn"), (kz2[2], "🔴 Zona Crítica", "kpi-danger")]:
+        col_k.markdown(kpi_html(z, f"{fmt(zonas_año[z][0], 0)}", f"{fmt(zonas_año[z][1], 1, ' %')} de {fmt(n_conz, 0)} con Z''", cls), True)
+    kz2[3].markdown(kpi_html(SIN_Z, f"{fmt(n_sinz, 0)}", "Falta 'Resultados acumulados' en EMIS", "kpi-info"), True)
+    with st.expander("¿Qué es el Z'' de Altman y por qué se usa el calculado y no el de EMIS?"):
+        e1, e2 = st.columns([1, 1])
+        with e1: ficha("zscore")
+        with e2:
+            interp("El Z'' se calcula en el cuaderno con una fórmula conocida y los estados financieros de EMIS. Así se puede "
+                   "<b>descomponer en X1–X4</b> y explicar por qué cada empresa está en su zona. EMIS reporta otro puntaje "
+                   "con un método no documentado. Ambos ordenan a las empresas de forma muy parecida (Spearman ≈ 0,98, zona "
+                   "coincidente en el 89–93 % de los casos), pero <b>no son iguales</b>: en 2024, con las mismas empresas, EMIS ubica el "
+                   "21,8 % en Zona Crítica y el cálculo propio el 17,7 %. El costo de la decisión es la cobertura: el Z'' calculado "
+                   "no está disponible para el 12 % de las empresas.", "Decisión metodológica")
 
     col_zl, col_zr = st.columns([1.1, 0.9])
-
     with col_zl:
-        # Distribución Z-Score por sector
-        st.markdown("<p class='section-header'>Z-Score mediano y deuda/activos por sector</p>", True)
-
-        if z_col in df.columns and deuda_col in df.columns:
-            zsec = (df.groupby("Sector_Corto")
-                    .agg(ZScore=(z_col, "median"),
-                         Deuda_Activos=(deuda_col, "median"))
-                    .reset_index()
-                    .sort_values("ZScore", ascending=False))
-
-            fig_z = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_z.add_trace(go.Bar(
-                x=zsec["Sector_Corto"], y=zsec["ZScore"],
-                name="Z-Score (mediana)",
-                marker_color=[
-                    CLR["verde"] if v > 2.60
-                    else (CLR["amarillo"] if v >= 1.10 else CLR["rojo"])
-                    for v in zsec["ZScore"]
-                ],
-                text=zsec["ZScore"].round(2), textposition="outside", textfont_size=9,
-            ), secondary_y=False)
-            fig_z.add_trace(go.Scatter(
-                x=zsec["Sector_Corto"], y=zsec["Deuda_Activos"],
-                name="Deuda / Activos % (eje der.)",
-                mode="lines+markers",
-                line=dict(color=CLR["amarillo"], width=2, dash="dot"),
-                marker_size=7,
-            ), secondary_y=True)
-            fig_z.add_hline(y=2.60, line_dash="dash", line_color=CLR["verde"],
-                            opacity=0.5, annotation_text=" Segura (2.60)",
-                            annotation_font_size=9, annotation_font_color=CLR["verde"])
-            fig_z.add_hline(y=1.10, line_dash="dash", line_color=CLR["rojo"],
-                            opacity=0.5, annotation_text=" Quiebra (1.10)",
-                            annotation_font_size=9, annotation_font_color=CLR["rojo"])
-            fig_z.update_layout(**LAYOUT_BASE, height=380, xaxis_tickangle=-35)
-            fig_z.update_yaxes(title_text="Z-Score de Altman", secondary_y=False,
-                               title_font_color="#C20E1A")
-            fig_z.update_yaxes(title_text="Deuda / Activos (%)", secondary_y=True,
-                               title_font_color="#854F0B")
-            st.plotly_chart(fig_z, use_container_width=True)
-
-        interp("📌 <b>Z-Score de Altman (Z''):</b> modelo multivariado que combina "
-               "4 ratios financieros ponderados para predecir riesgo de insolvencia. "
-               "Fue adaptado por Altman, Hartzell & Peck (1995) para mercados emergentes. "
-               "<b>Zona Segura Z>2.60 | Alerta 1.10≤Z≤2.60 | Quiebra Z&lt;1.10</b>")
+        seccion(f"% de empresas en Zona Crítica por sector — {año_sel}")
+        con_z = df_año[df_año["Zona"] != SIN_Z]
+        rz = con_z.groupby("Sector_Corto").agg(n=("Zona", "size"), crit=("Zona", lambda s: (s == "🔴 Zona Crítica").mean() * 100),
+                                               z_med=(ZC, "median")).reset_index()
+        cob = df_año.groupby("Sector_Corto").size().rename("total")
+        rz = rz.join(cob, on="Sector_Corto")
+        rz["sin_z"] = (1 - rz["n"] / rz["total"]) * 100
+        if ocultar_peq:
+            rz = rz[rz["n"] >= N_MIN_SECTOR]
+        rz = rz.sort_values("crit", ascending=True)
+        fig_cr = go.Figure(go.Bar(x=rz["crit"], y=rz["Sector_Corto"], orientation="h", marker_color=CLR["rojo"],
+                                  text=[f"{v:.1f} %" for v in rz["crit"]], textposition="outside", textfont_size=9,
+                                  customdata=rz[["n", "z_med", "sin_z"]].values,
+                                  hovertemplate="<b>%{y}</b><br>% en Zona Crítica: %{x:.1f}<br>Empresas con Z'': %{customdata[0]}"
+                                                "<br>Z'' mediano: %{customdata[1]:.2f}<br>% sin Z'': %{customdata[2]:.0f}<extra></extra>"))
+        apply_layout(fig_cr, height=max(320, 26 * len(rz)))
+        fig_cr.update_xaxes(title_text="% de empresas con Z'' en Zona Crítica")
+        st.plotly_chart(fig_cr, use_container_width=True)
+        if len(rz):
+            alta_falta = rz[rz["sin_z"] > 30]["Sector_Corto"].tolist()
+            interp(f"En {año_sel}, las mayores proporciones en Zona Crítica están en {rz.iloc[-1]['Sector_Corto']} ({fmt(rz.iloc[-1]['crit'], 1, ' %')}) y "
+                   f"{rz.iloc[-2]['Sector_Corto'] if len(rz) > 1 else ''} ({fmt(rz.iloc[-2]['crit'] if len(rz) > 1 else np.nan, 1, ' %')}). "
+                   + (f"Cuidado: en {', '.join(alta_falta)} más del 30 % de las empresas no tiene Z'', por lo que el porcentaje puede no representar al sector. " if alta_falta else "")
+                   + "Pase el cursor para ver el número de empresas y la cobertura.")
 
     with col_zr:
-        # Semáforo de riesgo por tamaño y sector
-        st.markdown("<p class='section-header'>Riesgo por tamaño empresarial</p>", True)
+        seccion(f"Zonas Z'' por tamaño empresarial — {año_sel} (UVT del año)")
+        tz = con_z.groupby(["Tamaño (UVT del año)", "Zona"]).size().reset_index(name="n")
+        tz["pct"] = tz["n"] / tz.groupby("Tamaño (UVT del año)")["n"].transform("sum")
+        tot_t = con_z.groupby("Tamaño (UVT del año)").size()
+        tz["Tamaño"] = tz["Tamaño (UVT del año)"].map(lambda t: f"{t} (n={fmt(tot_t[t], 0)})")
+        fig_rk = px.bar(tz, x="Tamaño", y="pct", color="Zona", barmode="stack", color_discrete_map=COLOR_ZONA,
+                        category_orders={"Zona": ZONAS[::-1]}, labels={"pct": "Proporción", "Zona": "Zona Z''"})
+        fig_rk.update_layout(**LAYOUT_BASE, height=300, yaxis_tickformat=".0%")
+        st.plotly_chart(fig_rk, use_container_width=True)
+        interp("El tamaño se calcula con los ingresos y el UVT de cada año. Como la muestra son las mayores empresas por ingresos "
+               "de 2024, en ese año casi todas son 'Grandes'; cambie el año en la barra lateral para ver más medianas. "
+               "Los grupos con menos de 30 empresas son solo referenciales.")
 
-        if col_zona in df.columns:
-            risk_tam = (df.groupby(["Clasificación_957", col_zona])
-                        .size().reset_index(name="n"))
-            risk_tam["total"] = risk_tam.groupby("Clasificación_957")["n"].transform("sum")
-            risk_tam["pct"] = risk_tam["n"] / risk_tam["total"]
+        seccion("Empresas con el Z'' más bajo (sin alerta de calidad de dato)")
+        low = con_z[~con_z["Alerta_Calidad_Dato"]].nsmallest(12, ZC)[["Compañía", "Sector_Corto", ZC]]
+        fig_qui = go.Figure(go.Bar(x=low[ZC], y=low["Compañía"].str[:35], orientation="h", marker_color=CLR["rojo"],
+                                   text=[fmt(v, 2) for v in low[ZC]], textposition="outside", textfont_size=9,
+                                   customdata=low[["Sector_Corto"]].values,
+                                   hovertemplate="<b>%{y}</b><br>%{customdata[0]}<br>Z'' = %{x:.2f}<extra></extra>"))
+        apply_layout(fig_qui, height=360); fig_qui.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig_qui, use_container_width=True)
+        interp("Lista descriptiva para explorar casos. Un Z'' muy bajo es una señal que conviene revisar con los estados financieros "
+               "de la empresa; no implica que la empresa esté en quiebra.")
 
-            fig_rk = px.bar(
-                risk_tam,
-                x="Clasificación_957", y="pct", color=col_zona,
-                barmode="stack",
-                color_discrete_map={
-                    "🟢 Zona Segura":  CLR["verde"],
-                    "🟡 Zona Alerta":  CLR["amarillo"],
-                    "🔴 Zona Quiebra": CLR["rojo"],
-                },
-                labels={"pct": "Proporción", "Clasificación_957": "Tamaño", col_zona: "Zona"},
-            )
-            fig_rk.update_layout(**LAYOUT_BASE, height=270,
-                                 yaxis_tickformat=".0%")
-            st.plotly_chart(fig_rk, use_container_width=True)
-
-        # Top 15 empresas en zona quiebra
-        st.markdown("<p class='section-header'>Empresas en mayor riesgo — Z-Score más bajo</p>", True)
-        if col_zona in df.columns:
-            df_qui = (df[df[col_zona] == "🔴 Zona Quiebra"]
-                      [["Compañía", "Sector_Corto", z_col]]
-                      .sort_values(z_col).head(12)
-                      .rename(columns={z_col: "Z-Score"}))
-            df_qui["Z-Score"] = df_qui["Z-Score"].round(3)
-
-            fig_qui = go.Figure(go.Bar(
-                x=df_qui["Z-Score"],
-                y=df_qui["Compañía"],
-                orientation="h",
-                marker_color=CLR["rojo"],
-                text=df_qui["Z-Score"],
-                textposition="outside",
-                textfont_size=9,
-            ))
-            apply_layout(fig_qui, height=330)
-            st.plotly_chart(fig_qui, use_container_width=True)
-
-    # ── Heatmap Riesgo sectorial ──────────────────────────────────────────────
     st.markdown("---")
-    st.markdown("<p class='section-header'>Mapa de calor: % empresas en Zona Quiebra por sector y año</p>", True)
-
-    heat_data = {}
-    for yr in AÑOS:
-        cz = f"Zona_ZScore_{yr}"
-        if cz in df_raw.columns:
-            tmp = (df_raw.groupby("Sector_Corto")
-                   .apply(lambda g: (g[cz] == "🔴 Zona Quiebra").sum() / len(g) * 100)
-                   .round(1))
-            heat_data[str(yr)] = tmp
-
-    df_heat = pd.DataFrame(heat_data).dropna(how="all")
-    df_heat = df_heat.sort_values(str(año_sel), ascending=False)
-
-    fig_heat = go.Figure(go.Heatmap(
-        z=df_heat.values,
-        x=df_heat.columns.tolist(),
-        y=df_heat.index.tolist(),
-        colorscale=[[0, CLR["verde"]], [0.4, CLR["amarillo"]], [1, CLR["rojo"]]],
-        text=np.round(df_heat.values, 1),
-        texttemplate="%{text}%",
-        textfont_size=10,
-        hovertemplate="%{y} — %{x}<br><b>%{z:.1f}% en Zona Quiebra</b><extra></extra>",
-        colorbar=dict(title=dict(text="% Quiebra", side="right")),
-    ))
-    fig_heat.update_layout(**LAYOUT_BASE, height=420)
+    seccion("Mapa de calor: % de empresas en Zona Crítica por sector y año")
+    serie_z = df_serie[df_serie["Zona"] != SIN_Z]
+    heat = serie_z.groupby(["Sector_Corto", "Año"]).agg(crit=("Zona", lambda s: (s == "🔴 Zona Crítica").mean() * 100), n=("Zona", "size")).reset_index()
+    if ocultar_peq:
+        heat = heat[heat["n"] >= N_MIN_SECTOR]
+    hp = heat.pivot(index="Sector_Corto", columns="Año", values="crit")
+    hn = heat.pivot(index="Sector_Corto", columns="Año", values="n").reindex_like(hp)
+    if año_sel in hp.columns:
+        hp = hp.sort_values(año_sel, ascending=False); hn = hn.reindex(hp.index)
+    fig_heat = go.Figure(go.Heatmap(z=hp.values, x=[str(c) for c in hp.columns], y=hp.index.tolist(),
+                                    colorscale=[[0, "#FFFFFF"], [0.5, CLR["amarillo"]], [1, CLR["rojo"]]],
+                                    text=np.round(hp.values, 1), texttemplate="%{text}%", textfont_size=10, customdata=hn.values,
+                                    hovertemplate="%{y} — %{x}<br><b>%{z:.1f} % en Zona Crítica</b><br>n con Z'' = %{customdata}<extra></extra>",
+                                    colorbar=dict(title=dict(text="% Crítica", side="right"))))
+    fig_heat.update_layout(**LAYOUT_BASE, height=max(360, 26 * len(hp)))
+    fig_heat.update_xaxes(type="category")
     st.plotly_chart(fig_heat, use_container_width=True)
+    interp("Cada celda es el porcentaje de empresas con Z'' del sector que están en Zona Crítica ese año. Celdas que se mantienen "
+           "altas en los cuatro años indican sectores donde el riesgo es persistente en la muestra.")
 
-    # ── NUEVA SECCIÓN: Decantación de componentes X1-X4 ──────────────────
     st.markdown("---")
-    st.markdown(
-        f"<p style='font-family:Montserrat,Arial,sans-serif;font-size:.85rem;"
-        f"font-weight:600;color:#222222;border-bottom:2px solid {CLR['rojo']};"
-        f"padding-bottom:.35rem;margin-bottom:.9rem;'>Decantación de componentes Z-Score por sector — {año_sel}</p>",
-        unsafe_allow_html=True
-    )
-    interp(
-        "El Z-Score combina cuatro componentes con diferentes pesos. "
-        "Esta visualización muestra la <b>contribución mediana ponderada de cada componente</b> "
-        "por sector en el año seleccionado. El componente con menor contribución es el que "
-        "<b>arrastra</b> a las empresas de cada sector hacia zonas de mayor riesgo. "
-        "X1 = Liquidez (CT/AT) · X2 = Rent. acumulada (UR/AT) · X3 = Efic. operativa (EBIT/AT) · X4 = Solvencia (Pat/Pas)"
-    )
-
-    col_contrib_cols = {
-        "X1 — Liquidez (CT/AT)":           f"Contrib_X1_{año_sel}",
-        "X2 — Rent. acumulada (UR/AT)":    f"Contrib_X2_{año_sel}",
-        "X3 — Efic. operativa (EBIT/AT)":  f"Contrib_X3_{año_sel}",
-        "X4 — Solvencia (Pat/Pas)":        f"Contrib_X4_{año_sel}",
-    }
-    contrib_ok = {k: v for k, v in col_contrib_cols.items() if v in df.columns}
-
-    if contrib_ok:
-        df_dec = df[["Sector_Corto"] + list(contrib_ok.values())].dropna()
-        df_dec = df_dec.rename(columns={v: k for k, v in contrib_ok.items()})
-        dec_sec = df_dec.groupby("Sector_Corto")[list(contrib_ok.keys())].median().round(4)
-        dec_sec = dec_sec.sort_values(list(contrib_ok.keys())[0], ascending=False)
-
+    seccion(f"¿Qué componente del Z'' es más bajo en cada sector? — {año_sel}")
+    zona_dec = st.radio("Zona analizada", ZONAS + ["Todas las zonas"], index=0, horizontal=True)
+    comp = {"X1 — Liquidez (CT/AT)": "Contrib_X1", "X2 — Utilidades acumuladas (UR/AT)": "Contrib_X2",
+            "X3 — Rentabilidad operativa (EBIT/AT)": "Contrib_X3", "X4 — Solvencia (Pat/Pas)": "Contrib_X4"}
+    base_dec = con_z if zona_dec == "Todas las zonas" else con_z[con_z["Zona"] == zona_dec]
+    dec = base_dec.groupby("Sector_Corto")[list(comp.values())].median().rename(columns={v: k for k, v in comp.items()})
+    dec["n"] = base_dec.groupby("Sector_Corto").size()
+    dec = dec[dec["n"] >= N_MIN_SECTOR]
+    if len(dec):
         fig_dec = go.Figure()
-        colores_x = [CLR["azul_claro"], CLR["gris_oscuro"], CLR["rojo"], CLR["verde"]]
-        for i, comp in enumerate(contrib_ok.keys()):
-            fig_dec.add_trace(go.Bar(
-                name=comp,
-                x=dec_sec.index,
-                y=dec_sec[comp],
-                marker_color=colores_x[i % len(colores_x)],
-            ))
-        fig_dec.update_layout(
-            **LAYOUT_BASE, barmode="group", height=380,
-            xaxis_tickangle=-35,
-            title=dict(
-                text=f"Contribución mediana ponderada de X1–X4 al Z-Score por sector — {año_sel}",
-                font_size=11, font_color=CLR["gris_oscuro"], x=0
-            ),
-            yaxis_title="Contribución al Z-Score (ponderada)",
-        )
+        for i, c in enumerate(comp):
+            fig_dec.add_trace(go.Bar(name=c, x=[f"{s} (n={n})" for s, n in zip(dec.index, dec["n"])], y=dec[c],
+                                     marker_color=[CLR["azul_claro"], CLR["gris_oscuro"], CLR["rojo"], CLR["verde"]][i]))
+        fig_dec.add_hline(y=0, line_color="#1A1A1A", line_width=0.8)
+        fig_dec.update_layout(**LAYOUT_BASE, barmode="group", height=400, xaxis_tickangle=-35, yaxis_title="Contribución mediana al Z''")
         st.plotly_chart(fig_dec, use_container_width=True)
-
-        # Componente más débil por sector
-        dec_sec["Componente débil"] = dec_sec[list(contrib_ok.keys())].idxmin(axis=1)
-        st.markdown(
-            f"<p style='font-family:Montserrat,Arial,sans-serif;font-size:.85rem;"
-            f"font-weight:600;color:#222222;border-bottom:2px solid {CLR['rojo']};"
-            f"padding-bottom:.35rem;margin-bottom:.9rem;'>Componente que más arrastra el Z-Score por sector</p>",
-            unsafe_allow_html=True
-        )
-        st.dataframe(
-            dec_sec[["Componente débil"]].rename(
-                columns={"Componente débil": f"Factor limitante del Z-Score ({año_sel})"}
-            ),
-            use_container_width=True
-        )
+        dec["Componente más bajo"] = dec[list(comp)].idxmin(axis=1)
+        cuenta = dec["Componente más bajo"].str[:2].value_counts()
+        interp(f"Se muestran solo sectores con al menos {N_MIN_SECTOR} empresas en la zona elegida. El componente más bajo es "
+               + ", ".join(f"{k} en {v} sector(es)" for k, v in cuenta.items())
+               + ". X1 bajo indica capital de trabajo neto estrecho o negativo; X2 bajo, pérdidas acumuladas. "
+                 "Como la zona se define con la suma de estos componentes, la lectura es descriptiva, no causal.")
+        st.dataframe(dec[["n", "Componente más bajo"] + list(comp)].round(3), use_container_width=True)
     else:
-        interp("Los datos de componentes X1–X4 no están disponibles en el dataset cargado. "
-               "Ejecuta el cuaderno de Jupyter actualizado para generarlos.")
+        interp(f"No hay sectores con al menos {N_MIN_SECTOR} empresas en la zona seleccionada con los filtros actuales.")
 
-    # ── NUEVA SECCIÓN: Matriz de transición de zonas 2021→2024 ───────────
     st.markdown("---")
-    st.markdown(
-        f"<p style='font-family:Montserrat,Arial,sans-serif;font-size:.85rem;"
-        f"font-weight:600;color:#222222;border-bottom:2px solid {CLR['rojo']};"
-        f"padding-bottom:.35rem;margin-bottom:.9rem;'>Matriz de transición de zonas Z-Score — 2021 → 2024</p>",
-        unsafe_allow_html=True
-    )
-    interp(
-        "La matriz de transición describe <b>cómo se movieron las empresas entre zonas de riesgo</b> "
-        "durante el período 2021–2024. Cada celda muestra el porcentaje de empresas que, estando "
-        "en una zona en 2021, terminaron en otra zona en 2024. La diagonal principal indica permanencia: "
-        "empresas que no cambiaron de zona. Valores altos fuera de la diagonal indican movilidad financiera. "
-        "<b>Validación empírica de Altman:</b> alta permanencia en zona de quiebra confirma la premisa "
-        "de que el Z-Score captura señales persistentes 2–3 años antes de dificultades financieras."
-    )
-
-    z21_col = "Zona_ZScore_2021"
-    z24_col = "Zona_ZScore_2024"
-    mov_col = "Movimiento_ZScore"
-
-    if z21_col in df_raw.columns and z24_col in df_raw.columns:
-        df_tr = df_raw[[z21_col, z24_col, mov_col]].copy()
-        df_tr = df_tr[
-            (~df_tr[z21_col].isin(["nan","<NA>"])) &
-            (~df_tr[z24_col].isin(["nan","<NA>"]))
-        ].dropna()
-
-        if len(df_tr) > 0:
-            col_tr1, col_tr2 = st.columns([1.2, 0.8])
-
-            with col_tr1:
-                # Heatmap de la matriz de transición
-                ORDEN_Z = ["🔴 Zona Quiebra", "🟡 Zona Alerta", "🟢 Zona Segura"]
-                mtz = pd.crosstab(df_tr[z21_col], df_tr[z24_col], normalize="index") * 100
-                mtz = mtz.reindex(index=[z for z in ORDEN_Z if z in mtz.index],
-                                   columns=[z for z in ORDEN_Z if z in mtz.columns],
-                                   fill_value=0).round(1)
-
-                fig_mtz = go.Figure(go.Heatmap(
-                    z=mtz.values,
-                    x=mtz.columns.tolist(),
-                    y=mtz.index.tolist(),
-                    colorscale=[[0, "#FFFFFF"], [0.5, CLR["amarillo"]], [1, CLR["verde"]]],
-                    text=[[f"{v:.1f}%" for v in row] for row in mtz.values],
-                    texttemplate="%{text}",
-                    textfont=dict(size=13, color="#222222"),
-                    hovertemplate="Zona 2021: %{y}<br>Zona 2024: %{x}<br>%{text} de empresas<extra></extra>",
-                    colorbar=dict(title=dict(text="% empresas")),
-                    zmin=0, zmax=100,
-                ))
-                fig_mtz.update_layout(
-                    **LAYOUT_BASE, height=320,
-                    xaxis_title="Zona en 2024",
-                    yaxis_title="Zona en 2021",
-                    title=dict(text="Matriz de transición — % por fila (zona de origen)",
-                               font_size=11, font_color=CLR["gris_oscuro"], x=0),
-                )
-                st.plotly_chart(fig_mtz, use_container_width=True)
-
-            with col_tr2:
-                # Barras de movilidad
-                if mov_col in df_tr.columns:
-                    mov_counts = df_tr[mov_col].value_counts()
-                    colores_mov = {"Mejoró": CLR["verde"], "Permaneció": CLR["gris_oscuro"],
-                                   "Empeoró": CLR["rojo"], "Sin dato": "#CFCFCF"}
-                    fig_mov = go.Figure(go.Bar(
-                        x=mov_counts.index.tolist(),
-                        y=mov_counts.values.tolist(),
-                        marker_color=[colores_mov.get(m, CLR["azul_claro"])
-                                      for m in mov_counts.index],
-                        text=[f"{v:,}<br>({v/len(df_tr)*100:.1f}%)" for v in mov_counts.values],
-                        textposition="outside",
-                        textfont_size=11,
-                    ))
-                    fig_mov.update_layout(
-                        **LAYOUT_BASE, height=320,
-                        yaxis_title="Número de empresas",
-                        title=dict(text="Movilidad entre zonas 2021→2024",
-                                   font_size=11, font_color=CLR["gris_oscuro"], x=0),
-                    )
-                    st.plotly_chart(fig_mov, use_container_width=True)
-    else:
-        interp("La matriz de transición requiere datos de zona Z-Score para 2021 y 2024. "
-               "Ejecuta el cuaderno de Jupyter actualizado para generarlos y exportar el CSV.")
+    seccion("Matriz de transición de zonas Z'' — 2021 → 2024")
+    w = wide_raw.copy()
+    if sector_sel:
+        w = w[w["Sector_Corto"].isin(sector_sel)]
+    w = w[w["Zona_ZScore 2021"].notna() & w["Zona_ZScore 2024"].notna()]
+    if len(w):
+        z21, z24 = w["Zona_ZScore 2021"].map(MAPA_ZONA), w["Zona_ZScore 2024"].map(MAPA_ZONA)
+        cnt = pd.crosstab(z21, z24).reindex(index=ZONAS, columns=ZONAS, fill_value=0)
+        pct = cnt.div(cnt.sum(axis=1).replace(0, np.nan), axis=0) * 100
+        ct1, ct2 = st.columns([1.2, 0.8])
+        with ct1:
+            fig_mtz = go.Figure(go.Heatmap(z=pct.values, x=ZONAS, y=ZONAS, zmin=0, zmax=100,
+                                           colorscale=[[0, "#FFFFFF"], [1, CLR["gris_oscuro"]]],
+                                           text=[[f"{p:.1f} %<br>({fmt(c, 0)})" for p, c in zip(rp, rc)] for rp, rc in zip(pct.values, cnt.values)],
+                                           texttemplate="%{text}", textfont=dict(size=12),
+                                           hovertemplate="2021: %{y}<br>2024: %{x}<br>%{text}<extra></extra>",
+                                           colorbar=dict(title=dict(text="% de la fila"))))
+            fig_mtz.update_layout(**LAYOUT_BASE, height=340, xaxis_title="Zona en 2024", yaxis_title="Zona en 2021")
+            st.plotly_chart(fig_mtz, use_container_width=True)
+        with ct2:
+            orden = {z: i for i, z in enumerate(ZONAS)}
+            mov = np.where(z24.map(orden) > z21.map(orden), "Mejoró", np.where(z24.map(orden) < z21.map(orden), "Empeoró", "Permaneció"))
+            mc = pd.Series(mov).value_counts().reindex(["Mejoró", "Permaneció", "Empeoró"]).fillna(0).astype(int)
+            fig_mov = go.Figure(go.Bar(x=mc.index, y=mc.values, marker_color=[CLR["verde"], CLR["gris_oscuro"], CLR["rojo"]],
+                                       text=[f"{fmt(v, 0)}<br>({v / mc.sum() * 100:.1f} %)" for v in mc.values], textposition="outside"))
+            apply_layout(fig_mov, height=340); fig_mov.update_yaxes(title_text="Empresas")
+            st.plotly_chart(fig_mov, use_container_width=True)
+        interp(f"Con {fmt(len(w), 0)} empresas con zona en 2021 y 2024: el {fmt(pct.loc['🔴 Zona Crítica', '🔴 Zona Crítica'], 1, ' %')} de las que estaban "
+               f"en Zona Crítica en 2021 sigue en ella en 2024, y la Zona Segura retiene al {fmt(pct.loc['🟢 Zona Segura', '🟢 Zona Segura'], 1, ' %')}. "
+               "Son frecuencias observadas en esta muestra, no probabilidades. La muestra solo incluye empresas que en 2024 siguen entre "
+               "las de mayores ingresos, por lo que no refleja a las que salieron del mercado.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — RENTABILIDAD & CLUSTERS
+# RENTABILIDAD Y DUPONT (Pregunta 3)
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab4:
-    roa_col  = f"Rendimiento Sobre Los Activos (ROA) (%) {año_sel}"
-    roe_col  = f"Rendimiento Sobre El Patrimonio (ROE) (%) {año_sel}"
-    mn_col   = f"Margen Neto (%) {año_sel}"
-    ebitda_col= f"Margen Ebitda (%) {año_sel}"
-    rot_col  = f"Rotación De Activos (x) {año_sel}"
+with t_ren:
+    pregunta(3, "¿Cuáles son las empresas y los sectores más rentables en términos de ROA, ROE y margen neto?")
+    kr = st.columns(4)
+    roe_validas = df_año[~df_año["Patrimonio_Negativo"]][ROE]
+    kr[0].markdown(kpi_html("ROA (mediana)", fmt(df_año[ROA].median(), 1, " %"), "Utilidad / activos", "kpi-info"), True)
+    kr[1].markdown(kpi_html("ROE (mediana)", fmt(roe_validas.median(), 1, " %"), "Excluye patrimonio ≤ 0", "kpi-info"), True)
+    kr[2].markdown(kpi_html("Margen neto (mediana)", fmt(df_año[MNE].median(), 1, " %"), "De cada $100 vendidos", "kpi-info"), True)
+    kr[3].markdown(kpi_html("Empresas con pérdidas", fmt((df_año[ROA] < 0).mean() * 100, 1, " %"), "ROA negativo", "kpi-info"), True)
+    with st.expander("¿Qué miden estos indicadores?"):
+        e1, e2 = st.columns(2)
+        with e1: ficha("roa"); ficha("margen_neto")
+        with e2: ficha("roe"); ficha("margen_ebitda")
 
-    # KPIs
-    kr1, kr2, kr3, kr4 = st.columns(4)
-    kr1.markdown(kpi_html("📈 ROA mediano",  f"{df[roa_col].median():.1f}%",
-                          "Retorno sobre activos",    "kpi-info"), True)
-    kr2.markdown(kpi_html("💼 ROE mediano",  f"{df[roe_col].median():.1f}%",
-                          "Retorno sobre patrimonio", "kpi-info"), True)
-    kr3.markdown(kpi_html("📊 Margen Neto",  f"{df[mn_col].median():.1f}%",
-                          "De cada $100 vendidos",    "kpi-info"), True)
-    kr4.markdown(kpi_html("⚡ Margen EBITDA", f"{df[ebitda_col].median():.1f}%",
-                          "Generación de caja operativa", "kpi-info"), True)
-
-    # ── Expanders rentabilidad ────────────────────────────────────────────────
-    with st.expander("Definición y lectura de los indicadores de rentabilidad"):
-        er1, er2 = st.columns(2)
-        with er1:
-            ficha_indicador(**FICHAS["roa"])
-            ficha_indicador(**FICHAS["margen_neto"])
-        with er2:
-            ficha_indicador(**FICHAS["roe"])
-            ficha_indicador(**FICHAS["margen_ebitda"])
-
-    st.markdown("<br>", True)
     col_r1, col_r2 = st.columns([1.1, 0.9])
-
     with col_r1:
-        # ROA por sector
-        st.markdown("<p class='section-header'>ROA y Margen Neto por sector — " + str(año_sel) + "</p>", True)
-        rent_sec = (df.groupby("Sector_Corto")
-                    .agg(ROA=(roa_col, "median"), Margen_Neto=(mn_col, "median"))
-                    .reset_index().sort_values("ROA", ascending=False))
-
+        seccion(f"ROA y margen neto por sector — {año_sel} (medianas)")
+        gr = resumen_por_grupo(df_año, "Sector_Corto", ROA).sort_values("Mediana", ascending=False)
+        gm = resumen_por_grupo(df_año, "Sector_Corto", MNE).set_index("Sector_Corto").reindex(gr["Sector_Corto"]).reset_index()
         fig_rent = go.Figure()
-        fig_rent.add_trace(go.Bar(
-            name="ROA (%)", x=rent_sec["Sector_Corto"], y=rent_sec["ROA"],
-            marker_color=CLR["azul_claro"],
-            text=rent_sec["ROA"].round(1), textposition="outside", textfont_size=9,
-        ))
-        fig_rent.add_trace(go.Scatter(
-            name="Margen Neto (%)", x=rent_sec["Sector_Corto"], y=rent_sec["Margen_Neto"],
-            mode="lines+markers", line=dict(color=CLR["amarillo"], width=2.5),
-            marker_size=8,
-        ))
-        apply_layout(fig_rent, height=370)
-        fig_rent.update_layout(xaxis_tickangle=-35)
+        fig_rent.add_trace(go.Bar(name="ROA (%)", x=gr["Sector_Corto"], y=gr["Mediana"], marker_color=CLR["azul_claro"],
+                                  text=[fmt(v, 1) for v in gr["Mediana"]], textposition="outside", textfont_size=9,
+                                  customdata=gr[["P25", "P75", "n"]].values, hovertemplate=HOVER_MED))
+        fig_rent.add_trace(go.Scatter(name="Margen neto (%)", x=gm["Sector_Corto"], y=gm["Mediana"], mode="lines+markers",
+                                      line=dict(color=CLR["amarillo"], width=2.5), marker_size=8,
+                                      customdata=gm[["P25", "P75", "n"]].values, hovertemplate=HOVER_MED))
+        apply_layout(fig_rent, height=400); fig_rent.update_layout(xaxis_tickangle=-35, yaxis_title="%")
         st.plotly_chart(fig_rent, use_container_width=True)
-
-        interp("📌 <b>ROA</b> (Return on Assets): mide la eficiencia en el uso de activos. "
-               "Un ROA alto en servicios profesionales (M) refleja la intensidad de capital "
-               "baja del sector. La caída en educación (P) sugiere altos activos fijos con "
-               "rentabilidad presionada por costos operativos crecientes.")
+        if len(gr):
+            interp(f"En {año_sel}, el ROA mediano más alto está en {gr.iloc[0]['Sector_Corto']} ({fmt(gr.iloc[0]['Mediana'], 1, ' %')}, n = {gr.iloc[0]['n']}) "
+                   f"y el más bajo en {gr.iloc[-1]['Sector_Corto']} ({fmt(gr.iloc[-1]['Mediana'], 1, ' %')}). Un margen alto con ROA bajo indica "
+                   "muchos activos por cada peso vendido (baja rotación); lo contrario, un negocio de volumen." + nota_n(gr))
 
     with col_r2:
-        # Top 20 empresas por ROA
-        st.markdown("<p class='section-header'>Top 15 empresas más rentables (ROA)</p>", True)
-        top_roa = (df.nlargest(15, roa_col)
-                   [["Compañía", "Sector_Corto", roa_col, roe_col, mn_col]]
-                   .rename(columns={roa_col: "ROA%", roe_col: "ROE%", mn_col: "MN%"}))
-        top_roa[["ROA%","ROE%","MN%"]] = top_roa[["ROA%","ROE%","MN%"]].round(1)
-
-        fig_top = go.Figure(go.Bar(
-            x=top_roa["ROA%"],
-            y=top_roa["Compañía"].str[:30],
-            orientation="h",
-            marker=dict(
-                color=top_roa["ROA%"],
-                colorscale=[[0, CLR["azul_claro"]], [0.5, CLR["verde_claro"]], [1, CLR["verde"]]],
-                showscale=False,
-            ),
-            text=top_roa["ROA%"].astype(str) + "%",
-            textposition="outside", textfont_size=9,
-            customdata=top_roa[["Sector_Corto", "ROE%", "MN%"]],
-            hovertemplate=(
-                "<b>%{y}</b><br>Sector: %{customdata[0]}<br>"
-                "ROA: %{x:.1f}%<br>ROE: %{customdata[1]:.1f}%<br>"
-                "Margen Neto: %{customdata[2]:.1f}%<extra></extra>"
-            ),
-        ))
-        apply_layout(fig_top, height=400)
+        seccion(f"15 empresas con mayor ROA — {año_sel}")
+        st.caption("Excluye empresas con alerta de calidad de dato o con patrimonio ≤ 0.")
+        top = df_año[~df_año["Alerta_Calidad_Dato"] & ~df_año["Patrimonio_Negativo"]].nlargest(15, ROA)
+        fig_top = go.Figure(go.Bar(x=top[ROA], y=top["Compañía"].str[:32], orientation="h", marker_color=CLR["verde"],
+                                   text=[fmt(v, 1, " %") for v in top[ROA]], textposition="outside", textfont_size=9,
+                                   customdata=top[["Sector_Corto", ROE, MNE]].values,
+                                   hovertemplate="<b>%{y}</b><br>%{customdata[0]}<br>ROA: %{x:.1f} %<br>ROE: %{customdata[1]:.1f} %"
+                                                 "<br>Margen neto: %{customdata[2]:.1f} %<extra></extra>"))
+        apply_layout(fig_top, height=430); fig_top.update_yaxes(autorange="reversed")
         st.plotly_chart(fig_top, use_container_width=True)
 
-    # ── DuPont decomposición ──────────────────────────────────────────────────
     st.markdown("---")
-    st.markdown("<p class='section-header'>Descomposición DuPont del ROE por sector — " + str(año_sel) + "</p>", True)
+    seccion(f"Descomposición DuPont del ROE por sector — {año_sel} (medianas, patrimonio > 0)")
+    dp = df_año[~df_año["Patrimonio_Negativo"]].dropna(subset=["DuPont_Margen", "DuPont_Rotacion", "DuPont_Apalancamiento"])
+    univ = dp[["DuPont_Margen", "DuPont_Rotacion", "DuPont_Apalancamiento"]].median()
+    dps = dp.groupby("Sector_Corto").agg(n=("ROE_DuPont_pct", "size"), Margen=("DuPont_Margen", "median"),
+                                         Rotacion=("DuPont_Rotacion", "median"), Apalancamiento=("DuPont_Apalancamiento", "median"),
+                                         ROE=("ROE_DuPont_pct", "median"))
+    if ocultar_peq:
+        dps = dps[dps["n"] >= N_MIN_SECTOR]
 
-    # Calcular componentes DuPont en el dataset filtrado
-    at_col  = f"Activos Totales {año_sel}"
-    pt_col  = f"Total de patrimonio {año_sel}"
-    ve_col  = f"Total Ingreso Operativo {año_sel}"
-    un_col  = f"Ganancia (Pérdida) Neta {año_sel}"
+    def _ventaja(r):
+        if r["Margen"] <= 0:
+            return "Margen neto ≤ 0"
+        rel = np.log(np.array([r["Margen"], r["Rotacion"], r["Apalancamiento"]]) / univ.values)
+        return ["Margen neto", "Rotación de activos", "Apalancamiento"][int(np.argmax(rel))]
+    if len(dps):
+        dps["Mayor ventaja relativa"] = dps.apply(_ventaja, axis=1)
+        dps = dps.sort_values("ROE", ascending=False)
+        fig_dp = make_subplots(rows=1, cols=4, shared_yaxes=True, horizontal_spacing=0.03,
+                               subplot_titles=("ROE (%)", "Margen neto (%)", "Rotación de activos (x)", "Apalancamiento (x)"))
+        for j, (col, mult, color, ref) in enumerate([("ROE", 1, CLR["rojo"], None), ("Margen", 100, CLR["azul_claro"], univ["DuPont_Margen"] * 100),
+                                                     ("Rotacion", 1, CLR["verde_claro"], univ["DuPont_Rotacion"]),
+                                                     ("Apalancamiento", 1, CLR["amarillo"], univ["DuPont_Apalancamiento"])], start=1):
+            fig_dp.add_trace(go.Bar(x=dps[col] * mult, y=dps.index, orientation="h", marker_color=color, showlegend=False,
+                                    text=[fmt(v, 2) for v in dps[col] * mult], textposition="outside", textfont_size=8,
+                                    hovertemplate="%{y}: %{x:.2f}<extra></extra>"), row=1, col=j)
+            if ref is not None:
+                fig_dp.add_vline(x=ref, line_dash="dot", line_color="#1A1A1A", opacity=0.5, row=1, col=j)
+        fig_dp.update_layout(**LAYOUT_BASE, height=max(380, 26 * len(dps)))
+        fig_dp.update_yaxes(autorange="reversed")
+        st.plotly_chart(fig_dp, use_container_width=True)
+        st.dataframe(dps[["n", "ROE", "Mayor ventaja relativa"]].round(2), use_container_width=True)
+        cnt_v = dps["Mayor ventaja relativa"].value_counts()
+        interp("Cada componente tiene su propia escala; la línea punteada es la mediana del universo. La 'mayor ventaja relativa' es el "
+               "componente en el que el sector más supera esa mediana: " + ", ".join(f"{k} ({v} sectores)" for k, v in cnt_v.items())
+               + f". El sector con mayor ROE mediano es {dps.index[0]} ({fmt(dps.iloc[0]['ROE'], 1, ' %')}, n = {int(dps.iloc[0]['n'])}).")
+    with st.expander("¿Cómo funciona la descomposición DuPont?"):
+        ficha("dupont")
 
-    dp_df = df[[at_col, pt_col, ve_col, un_col, "Sector_Corto"]].dropna()
 
-    dp_df = dp_df.copy()
-    dp_df["Margen_Neto_dp"]     = dp_df[un_col] / dp_df[ve_col]
-    dp_df["Rotacion_dp"]        = dp_df[ve_col] / dp_df[at_col]
-    dp_df["Apalancamiento_dp"]  = dp_df[at_col] / dp_df[pt_col]
+# ═══════════════════════════════════════════════════════════════════════════════
+# PERFILES FINANCIEROS (K-Means)
+# ═══════════════════════════════════════════════════════════════════════════════
+@st.cache_data(show_spinner="⏳ Proyectando empresas en el plano PCA…")
+def coordenadas_pca(_wide, _pp, _pca):
+    X = _wide[_pp["features"]].clip(_pp["lim_inf"], _pp["lim_sup"], axis=1)
+    Xz = pd.DataFrame(_pp["scaler_pre"].transform(X), columns=_pp["features"], index=X.index)
+    Xs = _pp["scaler_final"].transform(_pp["imputador_knn"].transform(Xz))
+    return _pca.transform(Xs), _pca.explained_variance_ratio_
 
-    # Eliminar outliers extremos para el plot
-    for col in ["Margen_Neto_dp", "Rotacion_dp", "Apalancamiento_dp"]:
-        q_lo, q_hi = dp_df[col].quantile([0.05, 0.95])
-        dp_df = dp_df[(dp_df[col] > q_lo) & (dp_df[col] < q_hi)]
-
-    dp_sec = (dp_df.groupby("Sector_Corto")
-              .agg(Margen=("Margen_Neto_dp", "median"),
-                   Rotacion=("Rotacion_dp", "median"),
-                   Apalancamiento=("Apalancamiento_dp", "median"))
-              .reset_index()
-              .sort_values("Margen", ascending=False))
-
-    fig_dp = go.Figure()
-    for comp, color, label in [
-        ("Margen",       CLR["azul_claro"], "Margen Neto"),
-        ("Rotacion",     CLR["verde_claro"],"Rotación Activos"),
-        ("Apalancamiento", CLR["amarillo"], "Apalancamiento"),
-    ]:
-        fig_dp.add_trace(go.Bar(
-            name=label,
-            x=dp_sec["Sector_Corto"],
-            y=dp_sec[comp],
-            marker_color=color,
-        ))
-
-    fig_dp.update_layout(
-        **LAYOUT_BASE, barmode="group", height=360, xaxis_tickangle=-35,
-        title=dict(text="ROE = Margen Neto × Rotación de Activos × Multiplicador de Apalancamiento",
-                   font_size=11, font_color="#C20E1A"),
-    )
-    st.plotly_chart(fig_dp, use_container_width=True)
-    interp("📌 <b>Descomposición DuPont:</b> desglosa el ROE en tres motores. Sectores con "
-           "alto apalancamiento (barras amarillas altas) generan rentabilidad mediante deuda, "
-           "no eficiencia. Sectores como servicios profesionales (M) logran ROE alto vía "
-           "<b>margen neto elevado</b> con bajo uso de activos — modelo de negocio superior.")
-
-    with st.expander("Metodología de la descomposición DuPont del ROE"):
-        ficha_indicador(**FICHAS["dupont"])
-
-    # ── Clusters K-Means ──────────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("<p class='section-header'>Segmentación K-Means — perfil financiero de clusters</p>", True)
-
-    if "kmeans_k3" in modelos and "pca_2d" in modelos and "scaler_financiero" in modelos:
-        feats = modelos["features_modelo"]
-        X_raw = df_raw[feats].fillna(0).values
-        X_sc  = modelos["scaler_financiero"].transform(X_raw)
-        X_pca = modelos["pca_2d"].transform(X_sc)
-
-        cluster_labels_map = {0: "Cluster A — Moderado", 1: "Cluster B — Alto desempeño", 2: "Cluster C — Atípico"}
-        clusters = modelos["kmeans_k3"].predict(X_sc)
-
-        df_pca_plot = pd.DataFrame({
-            "PC1": X_pca[:, 0],
-            "PC2": X_pca[:, 1],
-            "Cluster": [cluster_labels_map.get(c, f"C{c}") for c in clusters],
-            "Empresa": df_raw["Compañía"],
-            "Sector":  df_raw["Sector_Corto"],
-            "Z-Score": df_raw[f"Modelo Z-Score de Altman {año_sel}"].round(2),
-        })
-
-        fig_pca = px.scatter(
-            df_pca_plot, x="PC1", y="PC2", color="Cluster",
-            hover_data=["Empresa", "Sector", "Z-Score"],
-            opacity=0.65,
-            color_discrete_map={
-                "Cluster A — Moderado":       CLR["azul_claro"],
-                "Cluster B — Alto desempeño": CLR["verde_claro"],
-                "Cluster C — Atípico":        CLR["amarillo"],
-            },
-        )
-        fig_pca.update_traces(marker_size=4)
-        apply_layout(fig_pca,
-                     title="Proyección PCA 2D — agrupación K-Means (K=3) por perfil financiero",
-                     height=420)
+with t_clu:
+    st.markdown(f"<div class='interp-box'><b>¿Qué muestra esta pestaña?</b> Un algoritmo (K-Means) agrupó a las empresas según sus "
+                f"11 indicadores de liquidez, rentabilidad y endeudamiento de 2021 a 2024, <b>sin usar el Z''</b>. El resultado son tres "
+                f"perfiles financieros. Las 17 empresas con valores extremos que distorsionaban el modelo (p. ej., Federación Colombiana de "
+                f"Municipios y Metro de Bogotá) se trataron como <b>suplementarias</b>: no participaron en la construcción del modelo, pero "
+                f"se muestran en el gráfico (estrellas) y siguen en el resto del tablero.</div>", unsafe_allow_html=True)
+    wc = wide_raw.copy()
+    if sector_sel:
+        wc = wc[wc["Sector_Corto"].isin(sector_sel)]
+    faltan = [k for k in ["preproceso_clustering", "pca_2d"] if k not in modelos]
+    if not faltan:
+        coords, var = coordenadas_pca(wide_raw, modelos["preproceso_clustering"], modelos["pca_2d"])
+        wide_pca = wide_raw.assign(PC1=coords[:, 0], PC2=coords[:, 1])
+        wc = wide_pca.loc[wc.index]
+        seccion(f"Mapa de perfiles financieros (PCA: el plano resume el {fmt(var.sum() * 100, 1)} % de la variación)")
+        fig_pca = go.Figure()
+        for lab, g in wc[wc["Rol_Modelo_Multivariado"] == "Activa"].groupby("Cluster_Label"):
+            fig_pca.add_trace(go.Scatter(x=g["PC1"], y=g["PC2"], mode="markers", name=f"{lab} ({fmt(len(g), 0)})",
+                                         marker=dict(size=5, color=COLOR_CLUSTER.get(lab, CLR["gris_medio"]), opacity=0.55),
+                                         customdata=g[["Compañía", "Sector_Corto"]].values,
+                                         hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<extra></extra>"))
+        sup = wc[wc["Rol_Modelo_Multivariado"] == "Suplementaria"]
+        if len(sup):
+            fig_pca.add_trace(go.Scatter(x=sup["PC1"], y=sup["PC2"], mode="markers", name=f"Suplementarias ({len(sup)})",
+                                         marker=dict(symbol="star", size=13, color="#1A1A1A"),
+                                         customdata=sup[["Compañía", "Sector_Corto", "Cluster_Label"]].values,
+                                         hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<br>Más cercana a: %{customdata[2]}<extra></extra>"))
+        apply_layout(fig_pca, height=480)
+        fig_pca.update_xaxes(title_text=f"PC1 ({fmt(var[0] * 100, 1)} %) — a la derecha: más márgenes y liquidez, menos deuda")
+        fig_pca.update_yaxes(title_text=f"PC2 ({fmt(var[1] * 100, 1)} %) — arriba: más deuda financiera, menos liquidez")
         st.plotly_chart(fig_pca, use_container_width=True)
-        interp("📌 <b>Cluster B (Alto desempeño):</b> empresas con márgenes EBITDA >15% y bajo "
-               "endeudamiento. <b>Cluster A (Moderado):</b> el segmento más amplio — perfil "
-               "financiero estable pero conservador. <b>Cluster C (Atípico):</b> valores extremos "
-               "que requieren validación individual antes de incluir en benchmarks sectoriales.")
+        interp("Cada punto es una empresa; las cercanas tienen perfiles parecidos. El plano es una vista parcial, porque resume cerca del 40 % "
+               "de la variación: grupos que se superponen aquí pueden diferenciarse en otras dimensiones. Las suplementarias se ubican "
+               "después de acotar sus valores extremos, y su grupo asignado es solo referencial.")
+    else:
+        st.info("No se encontraron los artefactos del modelo en 'modelos_exportados/' (" + ", ".join(faltan) +
+                "). Se muestran solo los perfiles calculados en el cuaderno.")
 
-        with st.expander("Metodología de segmentación K-Means y reducción PCA"):
-            ficha_indicador(**FICHAS["kmeans"])
+    seccion(f"Perfil mediano de cada grupo — {año_sel} (empresas activas)")
+    act = df_año[df_año["Rol_Modelo_Multivariado"] == "Activa"]
+    perf_cols = {LIQ: "Razón corriente (x)", ROA: "ROA (%)", ROE: "ROE (%)", MOP: "Margen operacional (%)", MNE: "Margen neto (%)",
+                 DFA: "Deuda financiera/Activos (%)", PAS_ACT: "Pasivos/Activos (%)", ZC: "Z'' calculado"}
+    perf = act.groupby("Cluster_Label")[list(perf_cols)].median().rename(columns=perf_cols)
+    perf.insert(0, "Empresas", act.groupby("Cluster_Label").size())
+    perf.index.name = "Perfil financiero"
+    st.dataframe(perf.round(2), use_container_width=True)
+
+    seccion(f"Grupos vs. zonas Z'' — {año_sel}")
+    cz = act[act["Zona"] != SIN_Z]
+    if len(cz):
+        ctab = pd.crosstab(cz["Cluster_Label"], cz["Zona"], normalize="index").reindex(columns=ZONAS[::-1], fill_value=0) * 100
+        fig_cz = go.Figure()
+        for z in ZONAS[::-1]:
+            fig_cz.add_trace(go.Bar(name=z, y=ctab.index, x=ctab[z], orientation="h", marker_color=COLOR_ZONA[z],
+                                    text=[f"{v:.0f} %" for v in ctab[z]], textposition="inside"))
+        fig_cz.update_layout(**LAYOUT_BASE, barmode="stack", height=260, xaxis_title="% de empresas del grupo")
+        st.plotly_chart(fig_cz, use_container_width=True)
+        interp("Los grupos se formaron sin usar el Z'', así que esta es una comparación externa. La asociación es moderada: "
+               "el grupo de alta rentabilidad está casi todo en Zona Segura, mientras que el de mayor deuda financiera se reparte "
+               "entre las tres zonas. Los perfiles complementan al Z'', no lo reemplazan.")
+    if len(sup := df_año[df_año["Rol_Modelo_Multivariado"] == "Suplementaria"]):
+        with st.expander(f"Empresas suplementarias en la selección ({len(sup)})"):
+            st.dataframe(sup[["Compañía", "Sector_Corto", "Cluster_Label", ROA, MNE, LIQ]].rename(columns={"Cluster_Label": "Grupo más cercano"}),
+                         use_container_width=True, hide_index=True)
+    with st.expander("Metodología de la segmentación"):
+        ficha("kmeans")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — SIMULADOR FINANCIERO (DuPont + Z-Score)
+# FICHA DE EMPRESA
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab5:
+with t_emp:
+    st.markdown("<div class='interp-box'><b>Ficha de empresa:</b> seleccione una empresa para ver su evolución 2021–2024 frente a la "
+                "mediana de su sector y del universo. Puede escribir parte del nombre en el buscador.</div>", unsafe_allow_html=True)
+    empresas = sorted(panel_raw["Compañía"].unique())
+    emp = st.selectbox("Empresa", empresas, index=None, placeholder="Escriba el nombre de la empresa…")
+    if emp:
+        e = panel_raw[panel_raw["Compañía"] == emp].sort_values("Año")
+        sec = e["Sector_Corto"].iloc[0]
+        e_sel = e[e["Año"] == año_sel]
+        st.markdown(f"""
+        <div style='background:#FFFFFF;border:1px solid {CLR["gris_claro"]};border-left:4px solid {CLR["rojo"]};border-radius:0;
+                    padding:.8rem 1.2rem;margin:.6rem 0;'>
+          <div style='font-weight:700;font-size:1.05rem;color:{CLR["gris_oscuro"]};'>{emp}</div>
+          <div style='font-size:.8rem;color:#636363;margin-top:.2rem;'>Sector: <b>{e["Sección CIIU"].iloc[0]}</b> ·
+          Perfil financiero: <b>{e["Cluster_Label"].iloc[0]}</b> ({e["Rol_Modelo_Multivariado"].iloc[0].lower()} en el modelo) ·
+          Tamaño {año_sel}: <b>{e_sel["Tamaño (UVT del año)"].iloc[0] if len(e_sel) else "—"}</b></div></div>""", unsafe_allow_html=True)
+        zc = st.columns(4)
+        for i, a in enumerate(AÑOS):
+            r = e[e["Año"] == a]
+            if len(r):
+                z, zona = r[ZC].iloc[0], r["Zona"].iloc[0]
+                cls = {"🟢 Zona Segura": "kpi-safe", "🟡 Zona Alerta": "kpi-warn", "🔴 Zona Crítica": "kpi-danger"}.get(zona, "kpi-info")
+                alerta = " · ⚠️ alerta de calidad de dato" if r["Alerta_Calidad_Dato"].iloc[0] else ""
+                zc[i].markdown(kpi_html(f"Z'' {a}", fmt(z, 2), zona + alerta, cls), True)
+        ind = st.selectbox("Indicador", ["Razón corriente (x)", "Prueba ácida (x)", "Pasivos/Activos (%)", "Deuda financiera/Activos (%)",
+                                         "ROA (%)", "ROE (%)", "Margen neto (%)", "Margen EBITDA (%)", "Z'' calculado"], index=0)
+        col_ind = {"Razón corriente (x)": LIQ, "Prueba ácida (x)": ACI, "Pasivos/Activos (%)": PAS_ACT, "Deuda financiera/Activos (%)": DFA,
+                   "ROA (%)": ROA, "ROE (%)": ROE, "Margen neto (%)": MNE, "Margen EBITDA (%)": MEB, "Z'' calculado": ZC}[ind]
+        med_sec = panel_raw[panel_raw["Sector_Corto"] == sec].groupby("Año")[col_ind].median()
+        med_uni = panel_raw.groupby("Año")[col_ind].median()
+        fig_e = go.Figure()
+        fig_e.add_trace(go.Scatter(x=e["Año"], y=e[col_ind], name=emp[:30], mode="lines+markers+text", line=dict(color=CLR["rojo"], width=3),
+                                   text=[fmt(v, 2) for v in e[col_ind]], textposition="top center"))
+        fig_e.add_trace(go.Scatter(x=med_sec.index, y=med_sec.values, name=f"Mediana {sec}", mode="lines+markers",
+                                   line=dict(color=CLR["azul_claro"], dash="dot")))
+        fig_e.add_trace(go.Scatter(x=med_uni.index, y=med_uni.values, name="Mediana del universo", mode="lines",
+                                   line=dict(color=CLR["gris_medio"], dash="dash")))
+        apply_layout(fig_e, title=ind, height=380); eje_años(fig_e)
+        st.plotly_chart(fig_e, use_container_width=True)
+        v_e = e.set_index("Año")[col_ind]
+        if v_e.notna().sum() >= 2:
+            pos = "por encima" if v_e.get(año_sel, np.nan) > med_sec.get(año_sel, np.nan) else "por debajo"
+            interp(f"En {año_sel}, {emp} registra {fmt(v_e.get(año_sel), 2)} en {ind.lower()}, {pos} de la mediana de su sector "
+                   f"({fmt(med_sec.get(año_sel), 2)}). Entre el primer y el último año con dato, el indicador pasa de "
+                   f"{fmt(v_e.dropna().iloc[0], 2)} a {fmt(v_e.dropna().iloc[-1], 2)}.")
+        seccion("Componentes del Z'' por año (contribución ponderada)")
+        comp_e = e.set_index("Año")[["Contrib_X1", "Contrib_X2", "Contrib_X3", "Contrib_X4"]]
+        if comp_e.notna().any().any():
+            fig_ce = go.Figure()
+            for c, nom, col in [("Contrib_X1", "X1 Liquidez", CLR["azul_claro"]), ("Contrib_X2", "X2 Utilidades acumuladas", CLR["gris_oscuro"]),
+                                ("Contrib_X3", "X3 Rentabilidad operativa", CLR["rojo"]), ("Contrib_X4", "X4 Solvencia", CLR["verde"])]:
+                fig_ce.add_trace(go.Bar(name=nom, x=comp_e.index, y=comp_e[c], marker_color=col))
+            fig_ce.add_hline(y=0, line_color="#1A1A1A", line_width=0.8)
+            fig_ce.update_layout(**LAYOUT_BASE, barmode="relative", height=320)
+            eje_años(fig_ce)
+            st.plotly_chart(fig_ce, use_container_width=True)
+            interp("La suma de las cuatro barras de cada año es el Z''. Una barra negativa resta puntaje: por ejemplo, X1 negativo indica "
+                   "capital de trabajo neto negativo.")
+        else:
+            interp("Esta empresa no tiene Z'' calculado porque EMIS no reporta sus resultados acumulados.")
+        tabla_e = e.set_index("Año")[[LIQ, ACI, PAS_ACT, DFA, ROA, ROE, MNE, MEB, ZC]].T
+        tabla_e.index = ["Razón corriente (x)", "Prueba ácida (x)", "Pasivos/Activos (%)", "Deuda financiera/Activos (%)", "ROA (%)",
+                         "ROE (%)", "Margen neto (%)", "Margen EBITDA (%)", "Z'' calculado"]
+        tabla_e.columns = [str(c) for c in tabla_e.columns]
+        st.dataframe(tabla_e.round(2), use_container_width=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SIMULADOR
+# ═══════════════════════════════════════════════════════════════════════════════
+with t_sim:
     st.markdown(f"""
-    <div style='background:#FFFFFF;border:1px solid {CLR["gris_claro"]};
-                border-radius:6px;padding:1rem 1.4rem;margin-bottom:1rem;
+    <div style='background:#FFFFFF;border:1px solid {CLR["gris_claro"]};border-radius:0;padding:1rem 1.4rem;margin-bottom:1rem;
                 border-left:4px solid {CLR["rojo"]};'>
-      <div style='font-family:Montserrat,Arial,sans-serif;font-weight:700;
-                  font-size:1.05rem;color:{CLR["gris_oscuro"]};margin-bottom:.25rem;'>
-        Simulador financiero interactivo
-      </div>
-      <div style='font-size:.8rem;color:#555555;line-height:1.55;'>
-        Ingrese los datos financieros de una empresa para calcular su Z-Score de Altman,
-        la descomposición DuPont del ROE y obtener un diagnóstico automático de salud financiera.
-        El sistema utiliza los modelos de machine learning entrenados sobre el universo de empresas colombianas.
-      </div>
-    </div>
-    """, True)
-
-    # ── Formulario de entrada ─────────────────────────────────────────────────
-    st.markdown("<p class='section-header'>Datos financieros de la empresa</p>", True)
-
-    col_f1, col_f2, col_f3 = st.columns(3)
-
-    with col_f1:
-        st.markdown("**📦 Balance General (millones COP)**")
-        activos_totales  = st.number_input("Activos Totales",   min_value=0.0, value=5000.0, step=100.0, format="%.1f")
-        pasivos_totales  = st.number_input("Pasivos Totales",   min_value=0.0, value=2500.0, step=100.0, format="%.1f")
-        patrimonio       = st.number_input("Patrimonio Total",  min_value=0.0, value=2500.0, step=100.0, format="%.1f")
-        capital_trabajo  = st.number_input("Capital de Trabajo",value=800.0,  step=50.0,   format="%.1f")
-        ut_retenidas     = st.number_input("Utilidades Retenidas", value=500.0, step=50.0,  format="%.1f")
-
-    with col_f2:
-        st.markdown("**📈 Estado de Resultados (millones COP)**")
-        ventas      = st.number_input("Ventas / Ingresos Operativos", min_value=0.0, value=8000.0, step=100.0, format="%.1f")
-        utilidad_neta = st.number_input("Utilidad Neta",   value=400.0, step=50.0, format="%.1f")
-        ebit          = st.number_input("EBIT (Ut. Operativa)", value=600.0, step=50.0, format="%.1f")
-        ebitda        = st.number_input("EBITDA",          value=900.0, step=50.0, format="%.1f")
-
-    with col_f3:
-        st.markdown("**📑 Activos corrientes y pasivos CP**")
-        activos_corrientes = st.number_input("Activos Corrientes",   value=2000.0, step=100.0, format="%.1f")
-        pasivos_corrientes = st.number_input("Pasivos Corrientes",   value=1200.0, step=100.0, format="%.1f")
-        inventarios        = st.number_input("Inventarios",          value=400.0,  step=50.0,  format="%.1f")
-        efectivo           = st.number_input("Efectivo y equivalentes", value=300.0, step=50.0, format="%.1f")
-
-        st.markdown("**🏷️ Contexto**")
-        sector_sim  = st.selectbox("Sector CIIU", list(SECTOR_CORTO.values()))
-        nombre_sim  = st.text_input("Nombre empresa (opcional)", value="Mi Empresa S.A.")
-
-    calcular = st.button("⚡ Calcular diagnóstico financiero", type="primary",
-                         use_container_width=True)
-
-    st.markdown("---")
+      <div style='font-family:Helvetica Neue,Helvetica,Arial,sans-serif;font-weight:700;font-size:1.05rem;color:{CLR["gris_oscuro"]};'>Simulador financiero</div>
+      <div style='font-size:.8rem;color:#636363;line-height:1.55;'>Ingrese las cifras de una empresa (millones de COP) para calcular sus
+      indicadores, su Z'' de Altman y su descomposición DuPont, y compararla con las empresas del sector en {año_sel}.
+      Es un ejercicio descriptivo: no predice el futuro de la empresa.</div></div>""", True)
+    seccion("Datos financieros de la empresa")
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        st.markdown("**Balance general**")
+        activos_totales = st.number_input("Activos totales", min_value=0.0, value=5000.0, step=100.0, format="%.1f")
+        pasivos_totales = st.number_input("Pasivos totales", min_value=0.0, value=2500.0, step=100.0, format="%.1f")
+        patrimonio = st.number_input("Patrimonio total", value=2500.0, step=100.0, format="%.1f")
+        ut_retenidas = st.number_input("Utilidades retenidas (resultados acumulados)", value=500.0, step=50.0, format="%.1f")
+        deuda_fin = st.number_input("Deuda financiera (bancos y bonos)", min_value=0.0, value=800.0, step=50.0, format="%.1f")
+    with f2:
+        st.markdown("**Estado de resultados**")
+        ventas = st.number_input("Ingresos operativos", min_value=0.0, value=8000.0, step=100.0, format="%.1f")
+        utilidad_neta = st.number_input("Utilidad neta", value=400.0, step=50.0, format="%.1f")
+        ebit = st.number_input("EBIT (utilidad operativa)", value=600.0, step=50.0, format="%.1f")
+        ebitda = st.number_input("EBITDA", value=900.0, step=50.0, format="%.1f")
+    with f3:
+        st.markdown("**Corto plazo**")
+        activos_corrientes = st.number_input("Activos corrientes", min_value=0.0, value=2000.0, step=100.0, format="%.1f")
+        pasivos_corrientes = st.number_input("Pasivos corrientes", min_value=0.0, value=1200.0, step=100.0, format="%.1f")
+        inventarios = st.number_input("Inventarios", min_value=0.0, value=400.0, step=50.0, format="%.1f")
+        efectivo = st.number_input("Efectivo y equivalentes", min_value=0.0, value=300.0, step=50.0, format="%.1f")
+        sector_sim = st.selectbox("Sector de comparación", sorted(panel_raw["Sector_Corto"].unique()))
+    if abs(activos_totales - pasivos_totales - patrimonio) > 0.01 * max(activos_totales, 1):
+        st.warning("Activos ≠ Pasivos + Patrimonio: revise las cifras del balance.")
+    calcular = st.button("Calcular diagnóstico", type="primary", use_container_width=True)
 
     if calcular:
-        # ── Cálculos ─────────────────────────────────────────────────────────
-
-        # Ratios básicos
-        razon_corriente = activos_corrientes / pasivos_corrientes   if pasivos_corrientes else 0
-        prueba_acida    = (activos_corrientes - inventarios) / pasivos_corrientes if pasivos_corrientes else 0
-        razon_efectivo  = efectivo / pasivos_corrientes              if pasivos_corrientes else 0
-        deuda_activos   = pasivos_totales  / activos_totales * 100   if activos_totales else 0
-        deuda_capital   = pasivos_totales  / patrimonio * 100        if patrimonio else 0
-
-        # ── Z-Score de Altman Z'' (mercados emergentes, no cotizadas) ─────────
-        # X1 = Capital de Trabajo / Activos Totales
-        X1 = capital_trabajo / activos_totales          if activos_totales else 0
-        # X2 = Utilidades Retenidas / Activos Totales
-        X2 = ut_retenidas   / activos_totales           if activos_totales else 0
-        # X3 = EBIT / Activos Totales
-        X3 = ebit            / activos_totales           if activos_totales else 0
-        # X4 = Patrimonio (valor en libros) / Pasivos Totales
-        X4 = patrimonio      / pasivos_totales           if pasivos_totales else 0
-
-        zscore = 6.56 * X1 + 3.26 * X2 + 6.72 * X3 + 1.05 * X4
-
-        # Zona
-        if zscore > 2.60:
-            zona_txt   = "🟢 Zona Segura"
-            zona_color_val = CLR["verde"]
-            zona_class = "kpi-safe"
-            zona_bg_val= "rgba(30,132,73,.2)"
-        elif zscore >= 1.10:
-            zona_txt   = "🟡 Zona de Alerta"
-            zona_color_val = CLR["amarillo"]
-            zona_class = "kpi-warn"
-            zona_bg_val= "rgba(212,172,13,.2)"
-        else:
-            zona_txt   = "🔴 Zona de Quiebra"
-            zona_color_val = CLR["rojo"]
-            zona_class = "kpi-danger"
-            zona_bg_val= "rgba(192,57,43,.2)"
-
-        # ── DuPont ────────────────────────────────────────────────────────────
-        margen_neto_dp  = utilidad_neta / ventas         if ventas else 0
-        rotacion_dp     = ventas        / activos_totales if activos_totales else 0
-        apalancamiento_dp = activos_totales / patrimonio  if patrimonio else 0
-        roe_dupont      = margen_neto_dp * rotacion_dp * apalancamiento_dp
-
-        roa_calc  = utilidad_neta / activos_totales * 100  if activos_totales else 0
-        roe_calc  = utilidad_neta / patrimonio * 100        if patrimonio else 0
-        mn_calc   = utilidad_neta / ventas * 100            if ventas else 0
-        ebitda_mg = ebitda        / ventas * 100            if ventas else 0
-
-        # ── Predicción con modelo ML ──────────────────────────────────────────
-        ml_pred = None
-        ml_prob = None
-        if "random_forest_zscore" in modelos:
-            feats_ml  = modelos["features_modelo"]
-            # Construir vector con el año más reciente de cada variable
-            vals_sim = {}
-            for f in feats_ml:
-                base = f.rsplit(" ", 1)[0]  # quitar el año
-                if "ROA"              in f: vals_sim[f] = roa_calc
-                elif "ROE"            in f: vals_sim[f] = roe_calc
-                elif "Ebitda"         in f: vals_sim[f] = ebitda_mg
-                elif "Operacional"    in f: vals_sim[f] = ebit/ventas*100 if ventas else 0
-                elif "Margen Neto"    in f: vals_sim[f] = mn_calc
-                elif "Razón De Liquidez" in f: vals_sim[f] = razon_corriente
-                elif "Prueba Ácida"   in f: vals_sim[f] = prueba_acida
-                elif "Razón De Efectivo" in f: vals_sim[f] = razon_efectivo
-                elif "Z-Score"        in f: vals_sim[f] = zscore
-                elif "Deuda / Activos" in f: vals_sim[f] = deuda_activos
-                elif "Deuda/Capital"  in f: vals_sim[f] = deuda_capital
-                elif "Deuda Neta / EBITDA" in f: vals_sim[f] = 0
-                else: vals_sim[f] = 0
-            X_sim    = np.array([[vals_sim[f] for f in feats_ml]])
-            X_sim_sc = modelos["scaler_financiero"].transform(X_sim)
-            pred_enc = modelos["random_forest_zscore"].predict(X_sim_sc)[0]
-            ml_prob  = modelos["random_forest_zscore"].predict_proba(X_sim_sc)[0]
-            le       = modelos["label_encoder_zscore"]
-            ml_pred  = le.inverse_transform([pred_enc])[0]
-
-        # ══════════════ RESULTADOS ════════════════════════════════════════════
+        div = lambda a, b: a / b if b else np.nan
+        capital_trabajo = activos_corrientes - pasivos_corrientes
+        rc, pa_, re_ = div(activos_corrientes, pasivos_corrientes), div(activos_corrientes - inventarios, pasivos_corrientes), div(efectivo, pasivos_corrientes)
+        pas_act, dfa_ = div(pasivos_totales, activos_totales) * 100, div(deuda_fin, activos_totales) * 100
+        roa_, roe_ = div(utilidad_neta, activos_totales) * 100, div(utilidad_neta, patrimonio) * 100
+        mn_, meb_, mop_ = div(utilidad_neta, ventas) * 100, div(ebitda, ventas) * 100, div(ebit, ventas) * 100
+        X = [div(capital_trabajo, activos_totales), div(ut_retenidas, activos_totales), div(ebit, activos_totales), div(patrimonio, pasivos_totales)]
+        pesos = [6.56, 3.26, 6.72, 1.05]
+        zscore = float(np.nansum([w * x for w, x in zip(pesos, X)]))
+        zona_txt = "🟢 Zona Segura" if zscore > 2.60 else ("🟡 Zona Alerta" if zscore >= 1.10 else "🔴 Zona Crítica")
+        zcol = COLOR_ZONA[zona_txt]
         st.markdown(f"""
-        <div style='background:#FFFFFF;border:1.5px solid {zona_color_val};border-left:4px solid {zona_color_val};
-                    border-radius:12px;padding:1.2rem 1.5rem;margin-bottom:1rem;
-                    text-align:center;'>
-          <div style='font-size:.85rem;color:#333333;margin-bottom:.4rem;'>
-            Diagnóstico financiero — <b>{nombre_sim}</b> | Sector: {sector_sim}
-          </div>
-          <div style='font-size:2rem;font-weight:700;color:{zona_color_val};'>
-            {zona_txt}
-          </div>
-          <div style='font-size:1.4rem;font-weight:600;color:#333333;margin-top:.3rem;'>
-            Z-Score Altman Z'' = {zscore:.3f}
-          </div>
-          <div style='font-size:.8rem;color:#333333;margin-top:.4rem;'>
-            Fórmula: Z'' = 6.56·X₁ + 3.26·X₂ + 6.72·X₃ + 1.05·X₄
-          </div>
-        </div>
-        """, True)
-
-        # ── Grid resultados ───────────────────────────────────────────────────
-        col_res1, col_res2, col_res3 = st.columns(3)
-
-        with col_res1:
-            st.markdown("<p class='section-header'>Componentes Z-Score</p>", True)
-            comp_df = pd.DataFrame({
-                "Variable": ["X₁ = CT / Activos", "X₂ = Ut.Ret / Activos",
-                             "X₃ = EBIT / Activos", "X₄ = Patrim. / Pasivos"],
-                "Valor":    [round(X1,4), round(X2,4), round(X3,4), round(X4,4)],
-                "Pond.":    [6.56, 3.26, 6.72, 1.05],
-            })
-            comp_df["Contribución"] = (comp_df["Valor"] * comp_df["Pond."]).round(4)
+        <div style='background:#FFFFFF;border:1px solid {zcol};border-left:6px solid {zcol};border-radius:0;padding:1rem 1.4rem;
+                    margin-bottom:1rem;text-align:center;'>
+          <div style='font-size:1.8rem;font-weight:700;color:{zcol};'>{zona_txt}</div>
+          <div style='font-size:1.25rem;font-weight:600;color:#1A1A1A;'>Z'' = {zscore:.3f}</div>
+          <div style='font-size:.78rem;color:#636363;margin-top:.3rem;'>Capital de trabajo calculado = activos corrientes − pasivos corrientes =
+          {fmt(capital_trabajo, 1)} millones COP</div></div>""", True)
+        r1, r2, r3 = st.columns(3)
+        with r1:
+            seccion("Componentes del Z''")
+            comp_df = pd.DataFrame({"Componente": ["X1 Capital de trabajo / Activos", "X2 Utilidades retenidas / Activos",
+                                                   "X3 EBIT / Activos", "X4 Patrimonio / Pasivos"],
+                                    "Valor": np.round(X, 4), "Peso": pesos})
+            comp_df["Contribución"] = (comp_df["Valor"] * comp_df["Peso"]).round(3)
             st.dataframe(comp_df, use_container_width=True, hide_index=True)
-
-            # Gauge Z-Score
-            fig_gauge = go.Figure(go.Indicator(
-                mode="gauge+number+delta",
-                value=round(zscore, 3),
-                domain={"x": [0, 1], "y": [0, 1]},
-                title={"text": "Z-Score de Altman", "font": {"color": "#C20E1A", "size": 13}},
-                number={"font": {"color": "#1A1A1A", "size": 28}},
-                gauge={
-                    "axis": {"range": [-2, 6], "tickcolor": "#888888"},
-                    "bar":  {"color": zona_color_val, "thickness": 0.25},
-                    "bgcolor": CLR["tarjeta"],
-                    "bordercolor": CLR["azul_medio"],
-                    "steps": [
-                        {"range": [-2, 1.10], "color": "rgba(192,57,43,.3)"},
-                        {"range": [1.10, 2.60], "color": "rgba(212,172,13,.3)"},
-                        {"range": [2.60, 6],  "color": "rgba(30,132,73,.3)"},
-                    ],
-                    "threshold": {
-                        "line": {"color": "#333333", "width": 2},
-                        "thickness": 0.75,
-                        "value": zscore,
-                    },
-                },
-            ))
-            fig_gauge.update_layout(
-                paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
-                font_color="#333333", height=230,
-                margin=dict(t=30, b=10, l=20, r=20),
-            )
-            st.plotly_chart(fig_gauge, use_container_width=True)
-
-        with col_res2:
-            st.markdown("<p class='section-header'>Indicadores calculados</p>", True)
-
-            indicadores = [
-                ("💧 Razón Corriente",  f"{razon_corriente:.2f}x",
-                 "✅ OK" if razon_corriente >= 1.5 else ("⚠️" if razon_corriente >= 1.0 else "🚨 Riesgo")),
-                ("🧪 Prueba Ácida",     f"{prueba_acida:.2f}x",
-                 "✅ OK" if prueba_acida >= 1.0 else "⚠️ Vigilar"),
-                ("📈 ROA",              f"{roa_calc:.2f}%", ""),
-                ("💼 ROE",              f"{roe_calc:.2f}%", ""),
-                ("📊 Margen Neto",      f"{mn_calc:.2f}%",  ""),
-                ("⚡ Margen EBITDA",    f"{ebitda_mg:.2f}%",""),
-                ("⚖️ Deuda/Activos",    f"{deuda_activos:.1f}%",
-                 "✅ Bajo" if deuda_activos < 40 else ("⚠️ Moderado" if deuda_activos < 60 else "🚨 Alto")),
-                ("🔗 Deuda/Capital",    f"{deuda_capital:.1f}%", ""),
-            ]
-
-            for nombre, valor, estado in indicadores:
-                col_a, col_b, col_c = st.columns([2.2, 1.1, 0.9])
-                col_a.markdown(f"<span style='color:#333333;font-size:.82rem;'>{nombre}</span>", True)
-                col_b.markdown(f"<span style='color:#1A1A1A;font-weight:600;font-size:.9rem;'>{valor}</span>", True)
-                col_c.markdown(f"<span style='font-size:.75rem;'>{estado}</span>", True)
-
-        with col_res3:
-            st.markdown("<p class='section-header'>Descomposición DuPont</p>", True)
-
-            # Velocímetro DuPont
-            dp_val = {
-                "Margen Neto": margen_neto_dp * 100,
-                "Rotación Activos": rotacion_dp,
-                "Apalancamiento": apalancamiento_dp,
-                "ROE (DuPont)": roe_dupont * 100,
-            }
-
-            fig_dp_bar = go.Figure()
-            colors_dp = [CLR["azul_claro"], CLR["verde_claro"], CLR["amarillo"], CLR["rojo"]]
-            for i, (k, v) in enumerate(dp_val.items()):
-                fig_dp_bar.add_trace(go.Bar(
-                    name=k, x=[k], y=[round(v, 3)],
-                    marker_color=colors_dp[i],
-                    text=[f"{v:.2f}" + ("%" if "ROE" in k or "Margen" in k else "x")],
-                    textposition="outside", textfont_size=11,
-                ))
-            apply_layout(fig_dp_bar, height=220)
-            fig_dp_bar.update_layout(showlegend=False, barmode="group")
-            st.plotly_chart(fig_dp_bar, use_container_width=True)
-
-            # Fórmula DuPont
-            st.markdown(f"""
-            <div class='interp-box' style='text-align:center;font-size:.83rem;margin-top:.5rem;'>
-              <b>ROE = Margen × Rotación × Apalancamiento</b><br>
-              <code style='color:{CLR["verde_claro"]};'>{mn_calc:.2f}%</code> ×
-              <code style='color:{CLR["azul_claro"]};'>{rotacion_dp:.3f}x</code> ×
-              <code style='color:{CLR["amarillo"]};'>{apalancamiento_dp:.3f}x</code> =
-              <code style='color:#1A1A1A;font-size:1rem;font-weight:700;'>{roe_dupont*100:.2f}%</code>
-            </div>
-            """, True)
-
-            # Motor DuPont
-            if apalancamiento_dp >= rotacion_dp and apalancamiento_dp >= abs(margen_neto_dp):
-                motor = "⚠️ El ROE se sustenta principalmente en <b>deuda (apalancamiento)</b>, no en eficiencia operativa. Revisar estructura financiera."
-            elif rotacion_dp >= abs(margen_neto_dp):
-                motor = "✅ El ROE se impulsa por <b>eficiencia en el uso de activos</b> (rotación alta). Modelo operativo saludable."
+            debil = comp_df.loc[comp_df["Contribución"].idxmin(), "Componente"]
+            interp(f"El componente con menor aporte es <b>{debil}</b>.")
+        with r2:
+            seccion("Indicadores calculados")
+            st.dataframe(pd.DataFrame({"Indicador": ["Razón corriente (x)", "Prueba ácida (x)", "Razón de efectivo (x)", "Pasivos/Activos (%)",
+                                                     "Deuda financiera/Activos (%)", "ROA (%)", "ROE (%)", "Margen neto (%)", "Margen EBITDA (%)"],
+                                       "Valor": np.round([rc, pa_, re_, pas_act, dfa_, roa_, roe_, mn_, meb_], 2)}),
+                         use_container_width=True, hide_index=True)
+        with r3:
+            seccion("Descomposición DuPont")
+            m_dp, r_dp, a_dp = div(utilidad_neta, ventas), div(ventas, activos_totales), div(activos_totales, patrimonio)
+            st.markdown(f"<div class='interp-box' style='text-align:center;'>ROE = {fmt(m_dp * 100, 2, ' %')} × {fmt(r_dp, 2, 'x')} × "
+                        f"{fmt(a_dp, 2, 'x')} = <b>{fmt(m_dp * r_dp * a_dp * 100, 2, ' %')}</b></div>", True)
+            ref = panel_raw[(panel_raw["Año"] == año_sel) & ~panel_raw["Patrimonio_Negativo"]][["DuPont_Margen", "DuPont_Rotacion", "DuPont_Apalancamiento"]].median()
+            if patrimonio > 0 and m_dp > 0:
+                rel = np.log(np.array([m_dp, r_dp, a_dp]) / ref.values)
+                comp_v = ["margen neto", "rotación de activos", "apalancamiento"][int(np.argmax(rel))]
+                interp(f"Frente a la mediana del universo en {año_sel}, la mayor ventaja relativa de la empresa está en el <b>{comp_v}</b>.")
             else:
-                motor = "✅ El ROE se explica por <b>márgenes netos sólidos</b>. Alta rentabilidad sobre ventas."
-            interp(motor)
+                interp("Con patrimonio ≤ 0 o margen neto ≤ 0 la descomposición DuPont no es interpretable.")
 
-        # ── Predicción ML ─────────────────────────────────────────────────────
-        if ml_pred and ml_prob is not None:
-            st.markdown("---")
-            st.markdown("<p class='section-header'>Clasificación con Random Forest (modelo entrenado)</p>", True)
+        if "arbol_decision_zscore" in modelos and "features_arbol" in modelos:
+            vals = {LIQ: rc, ACI: pa_, EFE: re_, DFA: dfa_, DCAP: div(deuda_fin, patrimonio) * 100,
+                    DNE: div(deuda_fin - efectivo, ebitda), ROA: roa_, ROE: roe_, MOP: mop_, MNE: mn_, MEB: meb_}
+            X_arb = pd.DataFrame([{f: vals.get(f.rsplit(" ", 1)[0], np.nan) for f in modelos["features_arbol"]}])
+            try:
+                zona_arbol = modelos["arbol_decision_zscore"].predict(X_arb)[0]
+                interp(f"Con sus indicadores, el mapa de reglas (árbol de decisión de 3 niveles) ubica a la empresa en <b>{MAPA_ZONA.get(zona_arbol, zona_arbol)}</b>. "
+                       "El árbol es un resumen aproximado de la regla del Z'' (coincide en ≈ 72 % de las empresas de la muestra); "
+                       "la clasificación de referencia es el Z'' calculado arriba.", "Mapa de reglas")
+            except Exception as ex:
+                st.caption(f"No fue posible aplicar el árbol exportado: {ex}")
 
-            le_classes = modelos["label_encoder_zscore"].classes_
-            prob_dict  = dict(zip(le_classes, ml_prob))
+        seccion(f"Comparación con las empresas de {sector_sim} en {año_sel}")
+        ref_sec = panel_raw[(panel_raw["Año"] == año_sel) & (panel_raw["Sector_Corto"] == sector_sim) & ~panel_raw["Alerta_Calidad_Dato"]]
+        filas = []
+        for etq, col, val in [("Razón corriente (x)", LIQ, rc), ("Pasivos/Activos (%)", PAS_ACT, pas_act), ("ROA (%)", ROA, roa_),
+                              ("Margen neto (%)", MNE, mn_), ("Z'' calculado", ZC, zscore)]:
+            s = ref_sec[col].dropna()
+            filas.append({"Indicador": etq, "Su empresa": round(val, 2) if pd.notna(val) else None,
+                          "Mediana del sector": round(s.median(), 2) if len(s) else None,
+                          "Rango P25–P75 del sector": f"{s.quantile(.25):.2f} – {s.quantile(.75):.2f}" if len(s) else "—",
+                          "Percentil de su empresa en el sector": f"{(s < val).mean() * 100:.0f}" if len(s) and pd.notna(val) else "—"})
+        st.dataframe(pd.DataFrame(filas), use_container_width=True, hide_index=True)
+        interp(f"El percentil indica qué porcentaje de las {fmt(len(ref_sec), 0)} empresas del sector tiene un valor menor que el de su empresa. "
+               "En Pasivos/Activos, un percentil alto significa más endeudamiento que la mayoría.")
 
-            col_ml1, col_ml2 = st.columns([1, 1.5])
-            with col_ml1:
-                st.markdown(f"""
-                <div style='background:#FFFFFF;border:1px solid {CLR["gris_claro"]};
-                            border-radius:10px;padding:1rem;text-align:center;'>
-                  <div style='color:#C20E1A;font-size:.8rem;'>Clasificación RF (Accuracy 99.3%)</div>
-                  <div style='color:#1A1A1A;font-size:1.4rem;font-weight:700;margin:.4rem 0;'>
-                    {ml_pred}
-                  </div>
-                  <div style='color:#333333;font-size:.75rem;'>
-                    Basado en 48 indicadores financieros × 4 años
-                  </div>
-                </div>
-                """, True)
-
-            with col_ml2:
-                fig_prob = go.Figure(go.Bar(
-                    x=list(prob_dict.values()),
-                    y=list(prob_dict.keys()),
-                    orientation="h",
-                    marker_color=[zona_color(z) for z in prob_dict.keys()],
-                    text=[f"{p:.1%}" for p in prob_dict.values()],
-                    textposition="outside", textfont_size=10,
-                ))
-                fig_prob.update_layout(**LAYOUT_BASE, height=160,
-                                       xaxis_tickformat=".0%",
-                                       title=dict(text="Probabilidades por clase (Random Forest)",
-                                                  font_size=11, font_color="#C20E1A"))
-                st.plotly_chart(fig_prob, use_container_width=True)
-
-        # ── Recomendaciones ───────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("<p class='section-header'>Diagnóstico y recomendaciones automáticas</p>", True)
-
-        recs = []
-        if zscore > 2.60:
-            recs.append("✅ <b>Salud financiera sólida.</b> La empresa mantiene un equilibrio "
-                        "adecuado entre liquidez, solvencia y rentabilidad.")
-        elif zscore >= 1.10:
-            recs.append("⚠️ <b>Zona de alerta.</b> La empresa no está en crisis inmediata pero "
-                        "presenta señales de advertencia que requieren monitoreo trimestral.")
-        else:
-            recs.append("🚨 <b>Zona de quiebra.</b> Se detectan señales severas de dificultad "
-                        "financiera. Se recomienda intervención urgente en la estructura de capital.")
-
-        if razon_corriente < 1.0:
-            recs.append("🔴 <b>Liquidez crítica:</b> la razón corriente es inferior a 1.0x. "
-                        "La empresa no puede cubrir sus obligaciones de corto plazo con activos "
-                        "disponibles. Prioridad: mejorar el capital de trabajo.")
-        elif razon_corriente < 1.5:
-            recs.append("🟡 <b>Liquidez ajustada:</b> razón corriente entre 1.0–1.5x. "
-                        "Hay margen, pero limitado. Revisar ciclo de caja y políticas de crédito.")
-
-        if deuda_activos > 60:
-            recs.append("🔴 <b>Endeudamiento alto (>60%):</b> más de la mitad de los activos "
-                        "están financiados con deuda. Riesgo de refinanciamiento y costo "
-                        "financiero elevado. Considerar capitalización o reducción de pasivos.")
-        elif deuda_activos > 40:
-            recs.append("🟡 <b>Endeudamiento moderado (40–60%):</b> nivel de apalancamiento "
-                        "manejable pero que requiere control. Monitorear la cobertura de intereses.")
-
-        if roa_calc < 3:
-            recs.append("🟡 <b>ROA bajo (<3%):</b> la empresa genera poca utilidad por peso "
-                        "invertido en activos. Revisar eficiencia operativa y posible sobredimensionamiento.")
-
-        if apalancamiento_dp > 3:
-            recs.append("⚠️ <b>ROE impulsado por apalancamiento:</b> el multiplicador DuPont "
-                        "indica que la rentabilidad sobre el patrimonio depende más de la deuda "
-                        "que de la eficiencia. Riesgo en escenarios de alza de tasas.")
-
-        for rec in recs:
-            interp(rec)
-
-        # Benchmarks vs. muestra
-        st.markdown("<p class='section-header'>Comparación vs. benchmarks del sector ({año_sel})</p>", True)
-        bench_sec = df_raw[df_raw["Sector_Corto"] == sector_sim]
-        bench_all = df_raw
-
-        bench_cols = {
-            "Razón Corriente (x)": f"Razón De Liquidez (x) {año_sel}",
-            "ROA (%)":             f"Rendimiento Sobre Los Activos (ROA) (%) {año_sel}",
-            "Margen Neto (%)":     f"Margen Neto (%) {año_sel}",
-            "Z-Score":             f"Modelo Z-Score de Altman {año_sel}",
-            "Deuda/Activos (%)":   f"Deuda / Activos (%) {año_sel}",
-        }
-        vals_empresa = {
-            "Razón Corriente (x)": razon_corriente,
-            "ROA (%)":             roa_calc,
-            "Margen Neto (%)":     mn_calc,
-            "Z-Score":             zscore,
-            "Deuda/Activos (%)":   deuda_activos,
-        }
-
-        bench_rows = []
-        for etiqueta, col in bench_cols.items():
-            if col in df_raw.columns:
-                bench_rows.append({
-                    "Indicador":        etiqueta,
-                    "Tu empresa":       round(vals_empresa[etiqueta], 2),
-                    "Mediana sector":   round(bench_sec[col].median(), 2)  if len(bench_sec) else None,
-                    "Mediana Colombia": round(bench_all[col].median(), 2),
-                })
-
-        df_bench = pd.DataFrame(bench_rows)
-        fig_bench = go.Figure()
-        fig_bench.add_trace(go.Bar(
-            name="Tu empresa",
-            x=df_bench["Indicador"], y=df_bench["Tu empresa"],
-            marker_color=CLR["azul_claro"],
-        ))
-        fig_bench.add_trace(go.Scatter(
-            name="Mediana del sector",
-            x=df_bench["Indicador"], y=df_bench["Mediana sector"],
-            mode="lines+markers", line=dict(color=CLR["verde_claro"], width=2.5, dash="dot"),
-            marker_size=9,
-        ))
-        fig_bench.add_trace(go.Scatter(
-            name="Mediana Colombia",
-            x=df_bench["Indicador"], y=df_bench["Mediana Colombia"],
-            mode="lines+markers", line=dict(color=CLR["amarillo"], width=2, dash="dash"),
-            marker_size=7,
-        ))
-        apply_layout(fig_bench, height=340)
-        st.plotly_chart(fig_bench, use_container_width=True)
-        interp("Las líneas punteadas representan los <b>benchmarks de referencia</b>: "
-               "el mediano del sector seleccionado y el mediano del universo de 1.739 empresas "
-               "colombianas. Las barras muestran el valor calculado para tu empresa.")
+        seccion("Señales identificadas")
+        senales = [("🟢 El Z'' está en Zona Segura." if zscore > 2.6 else
+                    ("🟡 El Z'' está en Zona Alerta: conviene revisar los componentes con menor aporte." if zscore >= 1.1 else
+                     "🔴 El Z'' está en Zona Crítica: los componentes con menor aporte señalan dónde se concentra la debilidad."))]
+        if pd.notna(rc) and rc < 1:
+            senales.append("🔴 Razón corriente inferior a 1,0x: los activos corrientes no cubren los pasivos corrientes.")
+        elif pd.notna(rc) and rc < 1.5:
+            senales.append("🟡 Razón corriente entre 1,0x y 1,5x: cobertura de corto plazo ajustada.")
+        if pd.notna(pas_act) and pas_act > 60:
+            senales.append("🔴 Pasivos superiores al 60 % de los activos: endeudamiento total alto.")
+        if pd.notna(roa_) and roa_ < 2:
+            senales.append("🟡 ROA inferior a 2 %: baja utilidad por cada peso de activos.")
+        if pd.notna(a_dp) and a_dp > 3:
+            senales.append("🟡 Multiplicador de apalancamiento mayor a 3x: el ROE depende en buena medida del endeudamiento.")
+        for s_ in senales:
+            interp(s_, "Señal")
+        st.caption("Las señales se basan en rangos orientadores generales y no sustituyen un análisis financiero de la empresa.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 6 — GLOSARIO COMPLETO DE INDICADORES
+# GLOSARIO Y METODOLOGÍA
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab6:
-    st.markdown(f"""
-    <div style='background:#FFFFFF;border:1px solid {CLR["gris_claro"]};
-                border-radius:6px;padding:1rem 1.4rem;margin-bottom:1.2rem;
-                border-left:4px solid {CLR["rojo"]};'>
-      <div style='font-family:Montserrat,Arial,sans-serif;font-weight:700;
-                  font-size:1.05rem;color:{CLR["gris_oscuro"]};margin-bottom:.25rem;'>
-        Glosario de indicadores financieros
-      </div>
-      <div style='font-size:.8rem;color:#555555;line-height:1.55;'>
-        Fichas metodológicas con definiciones, fórmulas e interpretación de referencia para todos
-        los indicadores del dashboard. Diseñado para audiencias especializadas y no especializadas.
-      </div>
-    </div>
-    """, True)
-
-    # ── Buscador ──────────────────────────────────────────────────────────────
-    buscar = st.text_input(
-        "🔍 Buscar indicador",
-        placeholder="Escribe el nombre de un indicador (ej: ROA, liquidez, Z-Score…)",
-    )
-
-    CATEGORIAS = {
-        "Indicadores de Liquidez": ["razon_corriente", "prueba_acida", "razon_efectivo"],
-        "Indicadores de Rentabilidad": ["roa", "roe", "margen_neto", "margen_ebitda"],
-        "Indicadores de Endeudamiento": ["deuda_activos", "deuda_capital"],
-        "Modelo de Riesgo Financiero": ["zscore"],
-        "Análisis Avanzado": ["dupont", "kmeans"],
-    }
-
-    # Filtrar por búsqueda
-    termino = buscar.lower().strip()
-    for cat_titulo, claves in CATEGORIAS.items():
-        claves_filtradas = [
-            k for k in claves
-            if not termino
-            or termino in FICHAS[k]["nombre"].lower()
-            or termino in FICHAS[k]["tag"].lower()
-            or termino in FICHAS[k]["simple"].lower()
-        ]
-        if not claves_filtradas:
+with t_glo:
+    buscar = st.text_input("🔍 Buscar indicador", placeholder="Ej.: ROA, liquidez, Z''…")
+    CATEGORIAS = {"Liquidez": ["razon_corriente", "prueba_acida", "razon_efectivo"],
+                  "Endeudamiento": ["pasivos_activos", "deuda_activos", "deuda_capital"],
+                  "Rentabilidad": ["roa", "roe", "margen_neto", "margen_ebitda", "dupont"],
+                  "Riesgo y segmentación": ["zscore", "kmeans"]}
+    t_ = buscar.lower().strip()
+    for cat, claves in CATEGORIAS.items():
+        cl = [k for k in claves if not t_ or t_ in (FICHAS[k]["nombre"] + FICHAS[k]["tag"] + FICHAS[k]["simple"]).lower()]
+        if not cl:
             continue
+        seccion(cat)
+        st.markdown("<div style='display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:.8rem;margin-bottom:1.2rem;'>"
+                    + "".join(ficha_as_html(**FICHAS[k]) for k in cl) + "</div>", unsafe_allow_html=True)
 
-        # Encabezado de categoría
-        c_r = CLR["rojo"]
-        c_g = CLR["gris_oscuro"]
-        st.markdown(
-            f"<p style='font-family:Montserrat,Arial,sans-serif;font-size:.85rem;"
-            f"font-weight:600;color:{c_g};border-bottom:2px solid "
-            f"{c_r};padding-bottom:.35rem;margin-bottom:.9rem;"
-            f"letter-spacing:.01em;'>{cat_titulo}</p>",
-            unsafe_allow_html=True
-        )
-
-        # ── SOLUCIÓN React removeChild: renderizar TODAS las fichas de la
-        # categoría en UNA SOLA llamada st.markdown() con CSS Grid nativo.
-        # Esto evita que múltiples st.markdown() dentro de st.columns()
-        # provoquen conflictos de reconciliación en el DOM de React.
-        fichas_html = "".join(ficha_as_html(**FICHAS[k]) for k in claves_filtradas)
-        grid_html = (
-            f"<div style='display:grid;"
-            f"grid-template-columns:repeat(auto-fill,minmax(340px,1fr));"
-            f"gap:.8rem;margin-bottom:1.2rem;'>"
-            + fichas_html
-            + "</div>"
-        )
-        st.markdown(grid_html, unsafe_allow_html=True)
-
-    # ── Tabla resumen de umbrales ─────────────────────────────────────────────
     st.markdown("---")
-    st.markdown("<p class='section-header'>Tabla resumen de umbrales de referencia</p>", True)
-    interp(
-        "Esta tabla consolida los rangos de interpretación de todos los indicadores. "
-        "Los umbrales son referencias orientadoras; el contexto sectorial y el tamaño "
-        "de la empresa siempre deben considerarse para una interpretación correcta."
-    )
+    seccion("Metodología en breve")
+    st.markdown(f"""
+    <div class='interp-box' style='line-height:1.8;'>
+    <b>Universo:</b> 3.000 empresas con mayores ingresos operativos de 2024 (EMIS) → {fmt(N_EMPRESAS_TOTAL, 0)} empresas tras exigir activos, pasivos e
+    ingresos en los cuatro años, sección CIIU identificada y como máximo 50 % de indicadores faltantes. No se eliminan empresas por valores extremos.<br>
+    <b>Sector:</b> letra del primer código CIIU entre paréntesis de 'Sector (Local)'.<br>
+    <b>Tamaño:</b> Decreto 957 de 2019 con los ingresos y el UVT de cada año.<br>
+    <b>Estadístico central:</b> mediana y rango P25–P75, porque los indicadores tienen valores extremos que distorsionan el promedio.
+    Las medianas sectoriales se interpretan solo con al menos {N_MIN_SECTOR} empresas.<br>
+    <b>Riesgo:</b> Z'' de Altman calculado (no el de EMIS); sin imputación; porcentajes sobre empresas con Z''.<br>
+    <b>Perfiles:</b> K-Means (K = 3) sobre 44 indicadores; 17 empresas suplementarias por un criterio de influencia (&gt; 5 % de la varianza de un eje del PCA).<br>
+    <b>Calidad de datos:</b> alertas por ROA &gt; 100 %, ingresos &gt; 50 veces los activos, margen neto EMIS inconsistente o razón corriente &gt; 100.<br>
+    <b>Alcance:</b> caso de estudio descriptivo; los resultados dependen de estas decisiones y describen a las mayores empresas, no al conjunto del país.
+    </div>""", unsafe_allow_html=True)
 
-    tabla_umbrales = pd.DataFrame([
-        {"Indicador": "Razón Corriente",      "🟢 Bueno":  "≥ 1.5x",   "🟡 Atención": "1.0 – 1.5x",  "🔴 Riesgo":  "< 1.0x"},
-        {"Indicador": "Prueba Ácida",         "🟢 Bueno":  "≥ 1.0x",   "🟡 Atención": "0.8 – 1.0x",  "🔴 Riesgo":  "< 0.8x"},
-        {"Indicador": "Razón de Efectivo",    "🟢 Bueno":  "≥ 0.5x",   "🟡 Atención": "0.2 – 0.5x",  "🔴 Riesgo":  "< 0.2x"},
-        {"Indicador": "ROA (%)",              "🟢 Bueno":  "> 10%",     "🟡 Atención": "2 – 10%",      "🔴 Riesgo":  "< 2%"},
-        {"Indicador": "ROE (%)",              "🟢 Bueno":  "> 15%",     "🟡 Atención": "3 – 15%",      "🔴 Riesgo":  "< 3%"},
-        {"Indicador": "Margen Neto (%)",      "🟢 Bueno":  "> 10%",     "🟡 Atención": "1 – 10%",      "🔴 Riesgo":  "< 1%"},
-        {"Indicador": "Margen EBITDA (%)",    "🟢 Bueno":  "> 15%",     "🟡 Atención": "3 – 15%",      "🔴 Riesgo":  "< 3%"},
-        {"Indicador": "Deuda / Activos (%)",  "🟢 Bueno":  "< 40%",     "🟡 Atención": "40 – 60%",     "🔴 Riesgo":  "> 60%"},
-        {"Indicador": "Deuda / Capital (%)",  "🟢 Bueno":  "< 80%",     "🟡 Atención": "80 – 150%",    "🔴 Riesgo":  "> 150%"},
-        {"Indicador": "Z-Score de Altman",    "🟢 Bueno":  "> 2.60",    "🟡 Atención": "1.10 – 2.60",  "🔴 Riesgo":  "< 1.10"},
-    ])
-    st.dataframe(
-        tabla_umbrales,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Indicador":    st.column_config.TextColumn("Indicador",        width="medium"),
-            "🟢 Bueno":    st.column_config.TextColumn("🟢 Zona sana",     width="small"),
-            "🟡 Atención": st.column_config.TextColumn("🟡 Zona atención", width="small"),
-            "🔴 Riesgo":   st.column_config.TextColumn("🔴 Zona riesgo",   width="small"),
-        },
-    )
-
-    # ── Glosario de términos financieros generales ────────────────────────────
-    st.markdown("---")
-    st.markdown("<p class='section-header'>Glosario de términos financieros clave</p>", True)
-
+    seccion("Términos clave")
     TERMINOS = [
-        ("Activos Totales",
-         "Todo lo que tiene la empresa: dinero en banco, inventarios, máquinas, "
-         "edificios, derechos sobre clientes, etc. Es el 'patrimonio total' de la "
-         "empresa en términos contables."),
-        ("Pasivos Totales",
-         "Todo lo que debe la empresa: créditos bancarios, facturas por pagar a "
-         "proveedores, deudas con empleados, impuestos pendientes, etc."),
-        ("Patrimonio",
-         "Lo que le queda a los dueños si la empresa pagara todas sus deudas. "
-         "Patrimonio = Activos − Pasivos. También llamado capital contable o "
-         "valor en libros del negocio."),
-        ("Capital de Trabajo",
-         "La 'caja operativa' del negocio: Activos Corrientes − Pasivos Corrientes. "
-         "Un capital de trabajo positivo significa que la empresa puede operar día "
-         "a día sin necesitar financiamiento extra."),
-        ("EBIT",
-         "Ganancias Antes de Intereses e Impuestos (Earnings Before Interest and "
-         "Taxes). Mide el resultado de las operaciones principales sin contar cómo "
-         "está financiada la empresa ni los impuestos."),
-        ("EBITDA",
-         "EBIT más depreciación y amortización. Aproxima el flujo de caja generado "
-         "por las operaciones. Ampliamente usado para valorar empresas y comparar "
-         "negocios de distintos países o sectores."),
-        ("Utilidades Retenidas",
-         "Ganancias acumuladas que la empresa no repartió como dividendos. Son "
-         "una fuente de financiamiento propia; empresas con altas utilidades "
-         "retenidas suelen ser más robustas financieramente."),
-        ("Mediana vs. Media",
-         "En este dashboard se usa la mediana (valor central) en lugar de la media "
-         "(promedio) porque los datos financieros tienen distribuciones asimétricas. "
-         "Una empresa con ROA del 2.000% elevaría el promedio pero no la mediana, "
-         "dando una imagen más realista del sector."),
-        ("Sector CIIU",
-         "Clasificación Industrial Internacional Uniforme. Sistema de la ONU para "
-         "clasificar las actividades económicas. La letra indica la macrosección "
-         "(C=Manufactura, G=Comercio, F=Construcción, etc.)."),
-        ("Clasificación Decreto 957",
-         "Norma colombiana que clasifica las empresas por tamaño según sus ingresos "
-         "anuales: Microempresa, Pequeña, Mediana y Grande. Los umbrales varían "
-         "por sector (manufactura, servicios y comercio)."),
+        ("Mediana", "Valor de la empresa que queda en el medio al ordenar a todas. A diferencia del promedio, no se mueve por unos pocos valores extremos."),
+        ("Rango P25–P75", "Intervalo donde se ubica el 50 % central de las empresas. Muestra cuán parecidas o distintas son entre sí."),
+        ("Capital de trabajo", "Activos corrientes menos pasivos corrientes: recursos de corto plazo que quedan después de cubrir las deudas de corto plazo."),
+        ("Utilidades retenidas", "Ganancias acumuladas que no se repartieron como dividendos (en EMIS, 'Resultados acumulados')."),
+        ("EBIT / EBITDA", "Utilidad operativa antes de intereses e impuestos; el EBITDA, además, antes de depreciaciones y amortizaciones."),
+        ("Sección CIIU", "Letra de la Clasificación Industrial Internacional Uniforme que agrupa actividades económicas (C = manufactura, G = comercio…)."),
+        ("Decreto 957 de 2019", "Norma colombiana que clasifica el tamaño de las empresas por ingresos en UVT según el macrosector."),
+        ("Empresa suplementaria", "Empresa con valores tan extremos que, por sí sola, distorsionaba el modelo de perfiles. No participa en su construcción, pero se proyecta y se muestra."),
+        ("Alerta de calidad de dato", "Marca de empresas-año con cifras implausibles en EMIS. Se conservan, pero se excluyen de los rankings."),
     ]
+    g1, g2 = st.columns(2)
+    for i, (term, defn) in enumerate(TERMINOS):
+        (g1 if i % 2 == 0 else g2).markdown(
+            f"<div style='background:#FFFFFF;border-radius:0;padding:.7rem 1rem;border-left:3px solid {CLR['rojo']};margin-bottom:.6rem;'>"
+            f"<div style='color:{CLR['rojo']};font-weight:600;font-size:.85rem;'>{term}</div>"
+            f"<div style='color:#1A1A1A;font-size:.8rem;line-height:1.6;'>{defn}</div></div>", unsafe_allow_html=True)
 
-    tg1, tg2 = st.columns(2)
-    for i, (termino, defn) in enumerate(TERMINOS):
-        col_target = tg1 if i % 2 == 0 else tg2
-        with col_target:
-            st.markdown(f"""
-            <div style='background:{CLR["tarjeta"]};border-radius:8px;padding:.8rem 1rem;
-                        border-left:3px solid #C20E1A;margin-bottom:.6rem;'>
-              <div style='color:#C20E1A;font-weight:600;font-size:.85rem;margin-bottom:.35rem;'>
-                {termino}
-              </div>
-              <div style='color:#333333;font-size:.8rem;line-height:1.65;'>{defn}</div>
-            </div>
-            """, True)
-
-    # ── Referencias metodológicas ─────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown("<p class='section-header'>Referencias metodológicas</p>", True)
+    seccion("Referencias")
     refs = [
-        ("Altman, E. (1968)", "Financial ratios, discriminant analysis and the prediction of "
-         "corporate bankruptcy. <i>Journal of Finance</i>, 23(4), 589–609."),
-        ("Altman, Hartzell & Peck (1995)", "Emerging markets corporate bonds: a scoring system. "
-         "<i>Salomon Brothers</i>. Versión Z'' para mercados emergentes y empresas no cotizadas."),
-        ("Brigham & Houston (2014)", "<i>Fundamentals of Financial Management</i>. "
-         "Cengage Learning. Referencia estándar para ROA, ROE y análisis DuPont."),
-        ("Chapman et al. (2000)", "CRISP-DM 1.0: Step-by-step data mining guide. "
-         "Metodología adoptada para el desarrollo del presente trabajo de grado."),
-        ("Damodaran, A. (2012)", "<i>Investment Valuation</i>. Wiley. "
-         "Referencia para EBITDA como proxy de generación de caja operativa."),
-        ("Few, S. (2012)", "<i>Show Me the Numbers</i>. Analytics Press. "
-         "Principios de diseño de dashboards y uso de mediana vs. media en datos financieros."),
-        ("Tufte, E. (2001)", "<i>The Visual Display of Quantitative Information</i>. "
-         "Graphics Press. Principios de integridad visual aplicados al diseño del dashboard."),
-        ("Van Horne & Wachowicz (2010)", "<i>Fundamentals of Financial Management</i>. "
-         "Pearson. Referencia para indicadores de liquidez y solvencia."),
+        "Altman, E. I. (1968). Financial ratios, discriminant analysis and the prediction of corporate bankruptcy. <i>The Journal of Finance, 23</i>(4), 589–609.",
+        "Altman, E. I., Hartzell, J. y Peck, M. (1995). <i>Emerging markets corporate bonds: A scoring system</i>. Salomon Brothers. (Z'' de cuatro variables y modelo EMS).",
+        "Altman, E. I. y Hotchkiss, E. (2006). <i>Corporate financial distress and bankruptcy</i> (3.ª ed.). Wiley.",
+        "Breiman, L., Friedman, J., Olshen, R. y Stone, C. (1984). <i>Classification and regression trees</i>. Wadsworth.",
+        "Brigham, E. F. y Houston, J. F. (2014). <i>Fundamentals of financial management</i>. Cengage Learning.",
+        "Chapman, P. et al. (2000). <i>CRISP-DM 1.0: Step-by-step data mining guide</i>. SPSS.",
+        "Few, S. (2012). <i>Show me the numbers</i> (2.ª ed.). Analytics Press.",
+        "Husson, F., Lê, S. y Pagès, J. (2017). <i>Exploratory multivariate analysis by example using R</i> (2.ª ed.). CRC Press. (Individuos suplementarios en PCA).",
+        "Jolliffe, I. T. (2002). <i>Principal component analysis</i> (2.ª ed.). Springer.",
+        "MacQueen, J. (1967). Some methods for classification and analysis of multivariate observations. <i>Proceedings of the Fifth Berkeley Symposium on Mathematical Statistics and Probability, 1</i>, 281–297.",
+        "Ministerio de Comercio, Industria y Turismo (2019). <i>Decreto 957 de 2019</i>, criterios de clasificación de las micro, pequeñas, medianas y grandes empresas.",
+        "Rousseeuw, P. J. (1987). Silhouettes: A graphical aid to the interpretation and validation of cluster analysis. <i>Journal of Computational and Applied Mathematics, 20</i>, 53–65.",
+        "Troyanskaya, O. et al. (2001). Missing value estimation methods for DNA microarrays. <i>Bioinformatics, 17</i>(6), 520–525. (Imputación KNN).",
+        "Tufte, E. R. (2001). <i>The visual display of quantitative information</i> (2.ª ed.). Graphics Press.",
     ]
-    for autor, desc in refs:
-        st.markdown(f"""
-        <div style='margin-bottom:.5rem;font-size:.8rem;color:#333333;line-height:1.6;'>
-          <b style='color:#C20E1A;'>{autor}.</b> {desc}
-        </div>
-        """, True)
+    for r_ in refs:
+        st.markdown(f"<div style='margin-bottom:.45rem;font-size:.8rem;color:#1A1A1A;line-height:1.6;padding-left:1.2rem;text-indent:-1.2rem;'>{r_}</div>", True)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FOOTER
+# PIE DE PÁGINA
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown(f"""
-<div style='border-top:1px solid {CLR["gris_claro"]};margin:2rem 0 .8rem;
-            padding-top:.9rem;display:flex;align-items:center;
+<div style='border-top:1px solid {CLR["gris_claro"]};margin:2rem 0 .8rem;padding-top:.9rem;display:flex;
             justify-content:space-between;flex-wrap:wrap;gap:.5rem;'>
-  <div style='font-size:.72rem;color:#555555;line-height:1.75;'>
-    <span style='color:{CLR["rojo"]};font-family:Montserrat,Arial,sans-serif;
-                 font-weight:700;'>Universidad del Valle</span>
-    &nbsp;·&nbsp; Maestría en Analítica e Inteligencia de Negocios<br>
-    Trabajo de grado — Analítica descriptiva del desempeño financiero del sector real colombiano (2021–2024)
-  </div>
-  <div style='font-size:.7rem;color:#555555;text-align:right;line-height:1.7;'>
-    Modelo Z-Score: Altman Z&#8242;&#8242; (1995) · K-Means K=3 · Random Forest Acc. 99.3% · Metodología CRISP-DM<br>
-    Fuente: EMIS Platform · 1.739 empresas · 18 sectores CIIU · COP millones
-  </div>
-</div>
-""", unsafe_allow_html=True)
+  <div style='font-size:.72rem;color:#636363;line-height:1.75;'>
+    <span style='color:{CLR["rojo"]};font-weight:700;'>Universidad del Valle</span> · Maestría en Analítica e Inteligencia de Negocios<br>
+    Trabajo de grado — caso de estudio de analítica descriptiva del desempeño financiero (2021–2024)</div>
+  <div style='font-size:.7rem;color:#636363;text-align:right;line-height:1.7;'>
+    Z'' de Altman calculado · Perfiles K-Means (K = 3) · Metodología CRISP-DM<br>
+    Fuente: EMIS Platform · {fmt(N_EMPRESAS_TOTAL, 0)} empresas · {N_SECTORES_TOTAL} secciones CIIU · COP millones</div>
+</div>""", unsafe_allow_html=True)
